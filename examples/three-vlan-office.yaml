@@ -1,0 +1,198 @@
+project:
+  name: three-vlan-office
+  description: Three VLAN office topology with router-on-a-stick.
+
+sites:
+  - id: hq
+    name: Headquarters
+
+devices:
+  - id: r1
+    hostname: R1
+    type: router
+    platform: iosv
+    site_id: hq
+    interfaces:
+      - name: GigabitEthernet0/0
+      - name: GigabitEthernet0/0.10
+        ipv4_address: 192.168.10.1/24
+      - name: GigabitEthernet0/0.20
+        ipv4_address: 192.168.20.1/24
+      - name: GigabitEthernet0/0.30
+        ipv4_address: 192.168.30.1/24
+  - id: sw1
+    hostname: SW1
+    type: switch
+    platform: iosvl2
+    site_id: hq
+    interfaces:
+      - name: GigabitEthernet0/1
+        trunk_vlans: [10, 20, 30]
+      - name: GigabitEthernet0/2
+        access_vlan: 10
+      - name: GigabitEthernet0/3
+        access_vlan: 20
+      - name: GigabitEthernet0/4
+        access_vlan: 30
+  - id: admin-pc
+    hostname: ADMIN-PC
+    type: endpoint
+    platform: vpcs
+    site_id: hq
+    interfaces:
+      - name: Ethernet0
+  - id: student-pc
+    hostname: STUDENT-PC
+    type: endpoint
+    platform: vpcs
+    site_id: hq
+    interfaces:
+      - name: Ethernet0
+  - id: guest-pc
+    hostname: GUEST-PC
+    type: endpoint
+    platform: vpcs
+    site_id: hq
+    interfaces:
+      - name: Ethernet0
+
+links:
+  - source_device: r1
+    source_interface: GigabitEthernet0/0
+    target_device: sw1
+    target_interface: GigabitEthernet0/1
+  - source_device: sw1
+    source_interface: GigabitEthernet0/2
+    target_device: admin-pc
+    target_interface: Ethernet0
+  - source_device: sw1
+    source_interface: GigabitEthernet0/3
+    target_device: student-pc
+    target_interface: Ethernet0
+  - source_device: sw1
+    source_interface: GigabitEthernet0/4
+    target_device: guest-pc
+    target_interface: Ethernet0
+
+vlans:
+  - vlan_id: 10
+    name: ADMIN
+    subnet: 192.168.10.0/24
+    gateway: 192.168.10.1
+    endpoint_ids: [admin-endpoint]
+  - vlan_id: 20
+    name: STUDENT
+    subnet: 192.168.20.0/24
+    gateway: 192.168.20.1
+    endpoint_ids: [student-endpoint]
+  - vlan_id: 30
+    name: GUEST
+    subnet: 192.168.30.0/24
+    gateway: 192.168.30.1
+    endpoint_ids: [guest-endpoint]
+
+subnets:
+  - id: vlan10-subnet
+    name: ADMIN subnet
+    network: 192.168.10.0/24
+    gateway: 192.168.10.1
+    vlan_id: 10
+  - id: vlan20-subnet
+    name: STUDENT subnet
+    network: 192.168.20.0/24
+    gateway: 192.168.20.1
+    vlan_id: 20
+  - id: vlan30-subnet
+    name: GUEST subnet
+    network: 192.168.30.0/24
+    gateway: 192.168.30.1
+    vlan_id: 30
+
+endpoints:
+  - id: admin-endpoint
+    device_id: admin-pc
+    hostname: ADMIN-PC
+    ip_address: 192.168.10.10
+    vlan_id: 10
+    subnet_id: vlan10-subnet
+    default_gateway: 192.168.10.1
+  - id: student-endpoint
+    device_id: student-pc
+    hostname: STUDENT-PC
+    ip_address: 192.168.20.10
+    vlan_id: 20
+    subnet_id: vlan20-subnet
+    default_gateway: 192.168.20.1
+  - id: guest-endpoint
+    device_id: guest-pc
+    hostname: GUEST-PC
+    ip_address: 192.168.30.10
+    vlan_id: 30
+    subnet_id: vlan30-subnet
+    default_gateway: 192.168.30.1
+
+dhcp_pools:
+  - id: guest-dhcp
+    name: GUEST DHCP
+    subnet: 192.168.30.0/24
+    default_gateway: 192.168.30.1
+    dns_servers: [8.8.8.8]
+
+routes:
+  - id: guest-default
+    device_id: r1
+    destination: 0.0.0.0/0
+    next_hop: 10.0.0.1
+    outgoing_interface: GigabitEthernet0/0
+    protocol: static
+
+acls:
+  - id: guest-to-admin
+    name: guest-to-admin
+    type: extended
+    device_id: r1
+    rules:
+      - id: deny-guest-admin
+        action: deny
+        protocol: ip
+        source: 192.168.30.0/24
+        destination: 192.168.10.0/24
+      - id: permit-rest
+        action: permit
+        protocol: ip
+        source: any
+        destination: any
+
+services:
+  - id: guest-dhcp-service
+    name: Guest DHCP
+    kind: dhcp
+    vlan_id: 30
+    subnet_id: vlan30-subnet
+    critical: true
+
+connectivity_requirements:
+  - id: admin-to-student
+    source_endpoint_id: admin-endpoint
+    target_endpoint_id: student-endpoint
+    protocol: ping
+    expected: reachable
+  - id: guest-to-admin
+    source_endpoint_id: guest-endpoint
+    target_endpoint_id: admin-endpoint
+    protocol: ping
+    expected: blocked
+
+validation_tests:
+  - id: test-admin-student
+    name: Admin to Student ping
+    test_type: ping
+    source_endpoint_id: admin-endpoint
+    target_endpoint_id: student-endpoint
+    expected_success: true
+  - id: test-guest-admin
+    name: Guest to Admin blocked
+    test_type: acl
+    source_endpoint_id: guest-endpoint
+    target_endpoint_id: admin-endpoint
+    expected_success: false

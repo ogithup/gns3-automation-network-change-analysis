@@ -1,0 +1,165 @@
+project:
+  name: guest-isolation
+  description: Guest VLAN can reach shared services but not admin hosts.
+
+devices:
+  - id: r1
+    hostname: R1
+    type: router
+    platform: iosv
+    interfaces:
+      - name: GigabitEthernet0/0
+      - name: GigabitEthernet0/0.10
+        ipv4_address: 172.16.10.1/24
+      - name: GigabitEthernet0/0.30
+        ipv4_address: 172.16.30.1/24
+  - id: sw1
+    hostname: SW1
+    type: switch
+    platform: iosvl2
+    interfaces:
+      - name: GigabitEthernet0/1
+        trunk_vlans: [10, 30]
+      - name: GigabitEthernet0/2
+        access_vlan: 10
+      - name: GigabitEthernet0/3
+        access_vlan: 30
+      - name: GigabitEthernet0/4
+        access_vlan: 30
+  - id: admin-pc
+    hostname: ADMIN-PC
+    type: endpoint
+    platform: vpcs
+    interfaces:
+      - name: Ethernet0
+  - id: guest-pc-1
+    hostname: GUEST-PC-1
+    type: endpoint
+    platform: vpcs
+    interfaces:
+      - name: Ethernet0
+  - id: guest-pc-2
+    hostname: GUEST-PC-2
+    type: endpoint
+    platform: vpcs
+    interfaces:
+      - name: Ethernet0
+
+links:
+  - source_device: r1
+    source_interface: GigabitEthernet0/0
+    target_device: sw1
+    target_interface: GigabitEthernet0/1
+  - source_device: sw1
+    source_interface: GigabitEthernet0/2
+    target_device: admin-pc
+    target_interface: Ethernet0
+  - source_device: sw1
+    source_interface: GigabitEthernet0/3
+    target_device: guest-pc-1
+    target_interface: Ethernet0
+  - source_device: sw1
+    source_interface: GigabitEthernet0/4
+    target_device: guest-pc-2
+    target_interface: Ethernet0
+
+vlans:
+  - vlan_id: 10
+    name: ADMIN
+    subnet: 172.16.10.0/24
+    gateway: 172.16.10.1
+    endpoint_ids: [admin-endpoint]
+  - vlan_id: 30
+    name: GUEST
+    subnet: 172.16.30.0/24
+    gateway: 172.16.30.1
+    endpoint_ids: [guest-endpoint-1, guest-endpoint-2]
+
+subnets:
+  - id: admin-subnet
+    name: ADMIN subnet
+    network: 172.16.10.0/24
+    gateway: 172.16.10.1
+    vlan_id: 10
+  - id: guest-subnet
+    name: GUEST subnet
+    network: 172.16.30.0/24
+    gateway: 172.16.30.1
+    vlan_id: 30
+
+endpoints:
+  - id: admin-endpoint
+    device_id: admin-pc
+    hostname: ADMIN-PC
+    ip_address: 172.16.10.10
+    vlan_id: 10
+    subnet_id: admin-subnet
+    default_gateway: 172.16.10.1
+  - id: guest-endpoint-1
+    device_id: guest-pc-1
+    hostname: GUEST-PC-1
+    ip_address: 172.16.30.11
+    vlan_id: 30
+    subnet_id: guest-subnet
+    default_gateway: 172.16.30.1
+  - id: guest-endpoint-2
+    device_id: guest-pc-2
+    hostname: GUEST-PC-2
+    ip_address: 172.16.30.12
+    vlan_id: 30
+    subnet_id: guest-subnet
+    default_gateway: 172.16.30.1
+
+acls:
+  - id: guest-isolation
+    name: guest-isolation
+    type: extended
+    device_id: r1
+    rules:
+      - id: deny-guest-admin
+        action: deny
+        protocol: ip
+        source: 172.16.30.0/24
+        destination: 172.16.10.0/24
+      - id: permit-any
+        action: permit
+        protocol: ip
+        source: any
+        destination: any
+
+services:
+  - id: admin-access
+    name: Admin workstation access
+    kind: workstation
+    endpoint_id: admin-endpoint
+    critical: true
+  - id: guest-network
+    name: Guest internet access
+    kind: internet
+    vlan_id: 30
+
+connectivity_requirements:
+  - id: guest-to-admin-blocked
+    source_endpoint_id: guest-endpoint-1
+    target_endpoint_id: admin-endpoint
+    protocol: ping
+    expected: blocked
+  - id: guest-to-guest-allowed
+    source_endpoint_id: guest-endpoint-1
+    target_endpoint_id: guest-endpoint-2
+    protocol: ping
+    expected: reachable
+
+validation_tests:
+  - id: test-guest-admin-blocked
+    name: Guest to Admin blocked
+    test_type: acl
+    source_endpoint_id: guest-endpoint-1
+    target_endpoint_id: admin-endpoint
+    expected_success: false
+  - id: test-guest-peer
+    name: Guest to Guest reachability
+    test_type: ping
+    source_endpoint_id: guest-endpoint-1
+    target_endpoint_id: guest-endpoint-2
+    expected_success: true

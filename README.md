@@ -2,7 +2,9 @@
 
 NetTwin AI is a unified GNS3 automation and network change impact analysis platform.
 
-Sprint 0 provides the initial repository architecture, environment configuration, backend/frontend placeholders, and documentation required to start implementation without coupling business logic too early.
+Sprint 0 established the repository architecture, environment configuration, backend/frontend placeholders, and project documentation.
+
+Sprint 1 adds the vendor-neutral topology domain model, YAML/JSON parsing, topology validation, and example network specifications.
 
 ## Planned Workflow
 
@@ -83,7 +85,7 @@ npm run dev
 ### GNS3 Connectivity Check
 
 ```powershell
-curl http://localhost:3080/v2/version
+Invoke-WebRequest http://[::1]:3080/v2/version -UseBasicParsing
 ```
 
 ## Sprint 0 Deliverables
@@ -96,11 +98,77 @@ curl http://localhost:3080/v2/version
 - basic automated tests
 - repository scaffolding for later sprints
 
+## Sprint 1 Deliverables
+
+- vendor-neutral `TopologySpec`
+- Pydantic domain models for network objects
+- YAML and JSON topology parsing
+- topology validation engine
+- three example topology specifications
+- topology parser and validation tests
+
+## Sprint 1 Usage
+
+### Run Backend Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+pytest
+```
+
+### Run Only Sprint 1 Topology Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_topology_service.py -q
+```
+
+### Validate an Example Topology File
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'three-vlan-office.yaml'); print(spec.project.name, len(spec.devices), len(spec.vlans))"
+```
+
+Expected output:
+
+```text
+three-vlan-office 5 3
+```
+
+### Test JSON Serialization Round-Trip
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'guest-isolation.yaml'); serialized = TopologyService.to_json(spec); restored = TopologyService.load_json(serialized); print(restored.project.name)"
+```
+
+Expected output:
+
+```text
+guest-isolation
+```
+
+## Example Topologies
+
+- `examples/three-vlan-office.yaml`
+- `examples/two-router-ospf.yaml`
+- `examples/guest-isolation.yaml`
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 
 ## Current Status
 
-This repository intentionally avoids full business logic in Sprint 0. The goal is modularity, separation of concerns, extensibility, and testability.
+Current implementation includes:
 
+- Sprint 0 project scaffolding
+- Sprint 1 topology domain model and validation
+
+Business logic for GNS3 deployment, configuration application, discovery, simulation, and impact analysis is still deferred to later sprints.

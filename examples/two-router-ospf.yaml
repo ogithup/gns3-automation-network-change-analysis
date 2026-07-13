@@ -1,0 +1,127 @@
+project:
+  name: two-router-ospf
+  description: Two routers exchanging routes with OSPF.
+
+sites:
+  - id: branch-a
+    name: Branch A
+  - id: branch-b
+    name: Branch B
+
+devices:
+  - id: r1
+    hostname: R1
+    type: router
+    platform: iosv
+    site_id: branch-a
+    interfaces:
+      - name: GigabitEthernet0/0
+        ipv4_address: 10.0.0.1/30
+      - name: GigabitEthernet0/1
+        ipv4_address: 192.168.10.1/24
+  - id: r2
+    hostname: R2
+    type: router
+    platform: iosv
+    site_id: branch-b
+    interfaces:
+      - name: GigabitEthernet0/0
+        ipv4_address: 10.0.0.2/30
+      - name: GigabitEthernet0/1
+        ipv4_address: 192.168.20.1/24
+  - id: branch-a-pc
+    hostname: BRANCH-A-PC
+    type: endpoint
+    platform: vpcs
+    site_id: branch-a
+    interfaces:
+      - name: Ethernet0
+  - id: branch-b-pc
+    hostname: BRANCH-B-PC
+    type: endpoint
+    platform: vpcs
+    site_id: branch-b
+    interfaces:
+      - name: Ethernet0
+
+links:
+  - source_device: r1
+    source_interface: GigabitEthernet0/0
+    target_device: r2
+    target_interface: GigabitEthernet0/0
+  - source_device: r1
+    source_interface: GigabitEthernet0/1
+    target_device: branch-a-pc
+    target_interface: Ethernet0
+  - source_device: r2
+    source_interface: GigabitEthernet0/1
+    target_device: branch-b-pc
+    target_interface: Ethernet0
+
+subnets:
+  - id: wan
+    name: WAN Transit
+    network: 10.0.0.0/30
+  - id: branch-a-lan
+    name: Branch A LAN
+    network: 192.168.10.0/24
+    gateway: 192.168.10.1
+  - id: branch-b-lan
+    name: Branch B LAN
+    network: 192.168.20.0/24
+    gateway: 192.168.20.1
+
+endpoints:
+  - id: branch-a-endpoint
+    device_id: branch-a-pc
+    hostname: BRANCH-A-PC
+    ip_address: 192.168.10.10
+    subnet_id: branch-a-lan
+    default_gateway: 192.168.10.1
+  - id: branch-b-endpoint
+    device_id: branch-b-pc
+    hostname: BRANCH-B-PC
+    ip_address: 192.168.20.10
+    subnet_id: branch-b-lan
+    default_gateway: 192.168.20.1
+
+routing_protocols:
+  - id: ospf-r1
+    device_id: r1
+    protocol: ospf
+    process_id: 1
+    networks:
+      - 10.0.0.0/30
+      - 192.168.10.0/24
+  - id: ospf-r2
+    device_id: r2
+    protocol: ospf
+    process_id: 1
+    networks:
+      - 10.0.0.0/30
+      - 192.168.20.0/24
+
+services:
+  - id: branch-a-user-service
+    name: Branch A User Access
+    kind: user-access
+    subnet_id: branch-a-lan
+  - id: branch-b-user-service
+    name: Branch B User Access
+    kind: user-access
+    subnet_id: branch-b-lan
+
+connectivity_requirements:
+  - id: branch-a-to-branch-b
+    source_endpoint_id: branch-a-endpoint
+    target_endpoint_id: branch-b-endpoint
+    protocol: ping
+    expected: reachable
+
+validation_tests:
+  - id: test-branch-connectivity
+    name: Branch A to Branch B ping
+    test_type: routing
+    source_endpoint_id: branch-a-endpoint
+    target_endpoint_id: branch-b-endpoint
+    expected_success: true
