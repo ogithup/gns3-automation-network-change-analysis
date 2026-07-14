@@ -14,6 +14,8 @@ Sprint 4 adds deterministic topology layout, platform profiles, interface-to-por
 
 Sprint 5 adds Jinja2-based configuration generation, per-device rendering contexts, configuration preview output, deterministic hashes, and snapshot tests.
 
+Sprint 6 adds configuration deployment over Telnet console sessions, prompt detection, CLI discovery, adapter-based parsing, and discovered network state snapshots.
+
 ## Planned Workflow
 
 ```text
@@ -422,6 +424,84 @@ cd backend
 python -c "from pathlib import Path; from app.configuration.generator import ConfigurationRenderer; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'two-router-ospf.yaml'); preview = ConfigurationRenderer().render_topology(spec); print(next(item.content for item in preview.rendered_configurations if item.device_id == 'r1'))"
 ```
 
+## Sprint 6 Deliverables
+
+- GNS3 node console information retrieval
+- Telnet console channel abstraction using `telnetlib3`
+- Cisco IOS and VPCS prompt detection
+- Cisco initial configuration dialog handling
+- configuration application with CLI error detection
+- discovery parsers for interfaces, VLANs, trunks, routes, ACLs, and OSPF neighbors
+- desired and discovered state snapshots
+- simulated console and parser tests
+
+## Sprint 6 Usage
+
+### Install Sprint 6 Dependencies
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+```
+
+### GNS3 Preflight Before Sprint 6
+
+Verify that `IOSv`, `IOSvL2`, and `VPCS` nodes boot successfully in GNS3 and that console access works.
+
+Check GNS3 API availability:
+
+```powershell
+Invoke-WebRequest http://[::1]:3080/v2/version -UseBasicParsing
+Invoke-WebRequest http://[::1]:3080/v2/templates -UseBasicParsing
+```
+
+Confirm at least one live console from GNS3:
+
+- `IOSv` should reach `Router>` or `Router#`
+- `IOSvL2` should accept `enable`
+- `VPCS` should accept `show`
+
+### Run Only Sprint 6 Parser Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_discovery_parsers.py -q
+```
+
+### Run Only Sprint 6 Discovery Session Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_discovery_service.py -q
+```
+
+### Run Both Sprint 6 Test Files
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_discovery_parsers.py tests/test_discovery_service.py -q
+```
+
+### Inspect GNS3 Console Info for a Deployed Node
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "import asyncio; from app.gns3.client import GNS3Client; async def main():\n    async with GNS3Client() as client:\n        console = await client.get_node_console('YOUR_PROJECT_ID', 'YOUR_NODE_ID'); print(console.model_dump())\nasyncio.run(main())"
+```
+
+### Parse Sample Discovery Output from the Terminal
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from app.discovery.parsers import DiscoveryParserRegistry; parser = DiscoveryParserRegistry(); output = 'Interface                  IP-Address      OK? Method Status                Protocol\\nGigabitEthernet0/0         unassigned      YES unset  administratively down down\\nGigabitEthernet0/1         10.0.0.1        YES manual up                    up\\n'; print(parser.parse_ip_interface_brief(output))"
+```
+
 ## Current Status
 
 Current implementation includes:
@@ -432,5 +512,6 @@ Current implementation includes:
 - Sprint 3 GNS3 client and resource management layer
 - Sprint 4 topology deployment and port mapping engine
 - Sprint 5 configuration generation engine
+- Sprint 6 configuration deployment and discovery foundation
 
 Business logic for GNS3 deployment, configuration application, discovery, simulation, and impact analysis is still deferred to later sprints.
