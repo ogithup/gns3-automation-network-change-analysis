@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.domain.models import TopologySpec
 from app.gns3.client import GNS3Client
 from app.gns3.exceptions import GNS3DeploymentError, GNS3TemplateNotFoundError
+from app.gns3.deployment import TopologyDeploymentPlanner
 from app.gns3.models import (
     GNS3DeploymentPlan,
     GNS3DeploymentResult,
@@ -108,6 +109,17 @@ class GNS3NodeService:
             name=node.name,
         )
 
+    async def create_many(
+        self,
+        project_id: str,
+        requests: list[GNS3NodeDeploymentRequest],
+    ) -> list[GNS3DomainNodeMapping]:
+        mappings: list[GNS3DomainNodeMapping] = []
+        for request in requests:
+            _, mapping = await self.create(project_id, request)
+            mappings.append(mapping)
+        return mappings
+
     async def start(self, project_id: str, node_id: str) -> GNS3Node:
         return await self.client.start_node(project_id, node_id)
 
@@ -156,10 +168,12 @@ class GNS3DeploymentOrchestrator:
         project_service: GNS3ProjectService,
         node_service: GNS3NodeService,
         link_service: GNS3LinkService,
+        deployment_planner: TopologyDeploymentPlanner | None = None,
     ) -> None:
         self.project_service = project_service
         self.node_service = node_service
         self.link_service = link_service
+        self.deployment_planner = deployment_planner
 
     def build_dry_run_plan(
         self,
@@ -168,6 +182,8 @@ class GNS3DeploymentOrchestrator:
         *,
         link_requests: list[GNS3LinkDeploymentRequest] | None = None,
     ) -> GNS3DeploymentPlan:
+        if self.deployment_planner is not None and link_requests is None:
+            return self.deployment_planner.build_plan(topology, project_name=project_name)
         return GNS3DeploymentPlan(
             project_name=project_name,
             nodes=[
@@ -188,6 +204,11 @@ class GNS3DeploymentOrchestrator:
         *,
         link_requests: list[GNS3LinkDeploymentRequest] | None = None,
     ) -> GNS3DeploymentResult:
+        plan = (
+            self.deployment_planner.build_plan(topology, project_name=project_name)
+            if self.deployment_planner is not None and link_requests is None
+            else self.build_dry_run_plan(project_name, topology, link_requests=link_requests)
+        )
         project = await self.project_service.create(project_name)
         created_project_id = project.project_id
         node_mappings: list[GNS3DomainNodeMapping] = []
@@ -195,24 +216,16 @@ class GNS3DeploymentOrchestrator:
 
         try:
             project = await self.project_service.open(created_project_id)
-
-            for device in topology.devices:
-                _, mapping = await self.node_service.create(
-                    created_project_id,
-                    GNS3NodeDeploymentRequest(
-                        domain_device_id=device.id,
-                        name=device.hostname,
-                        platform=device.platform,
-                    ),
-                )
-                node_mappings.append(mapping)
+            node_mappings.extend(
+                await self.node_service.create_many(created_project_id, plan.nodes),
+            )
 
             mapping_by_domain_id = {
                 mapping.domain_device_id: mapping
                 for mapping in node_mappings
             }
 
-            for link_request in link_requests or []:
+            for link_request in plan.links:
                 link = await self.link_service.create(
                     created_project_id,
                     link_request,
@@ -220,10 +233,20 @@ class GNS3DeploymentOrchestrator:
                 )
                 links.append(link)
 
+            await self._start_nodes_in_dependency_order(
+                created_project_id,
+                topology,
+                mapping_by_domain_id,
+            )
+
             return GNS3DeploymentResult(
                 project=project,
                 node_mappings=node_mappings,
                 links=links,
+                devices={
+                    mapping.domain_device_id: mapping.gns3_node_id
+                    for mapping in node_mappings
+                },
             )
         except Exception as error:
             try:
@@ -236,3 +259,17 @@ class GNS3DeploymentOrchestrator:
             raise GNS3DeploymentError(
                 f"Deployment failed and rollback completed: {error}",
             ) from error
+
+    async def _start_nodes_in_dependency_order(
+        self,
+        project_id: str,
+        topology: TopologySpec,
+        mapping_by_domain_id: dict[str, GNS3DomainNodeMapping],
+    ) -> None:
+        priority = {"router": 0, "switch": 1, "firewall": 2, "server": 3, "endpoint": 4}
+        for device in sorted(
+            topology.devices,
+            key=lambda item: (priority.get(item.type, 99), item.id),
+        ):
+            mapping = mapping_by_domain_id[device.id]
+            await self.node_service.start(project_id, mapping.gns3_node_id)

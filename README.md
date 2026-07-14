@@ -10,6 +10,8 @@ Sprint 2 adds the IPv4 addressing and VLSM planning engine, including reserved r
 
 Sprint 3 adds the asynchronous GNS3 API client, template resolution, project/node/link resource management, and mocked deployment orchestration tests.
 
+Sprint 4 adds deterministic topology layout, platform profiles, interface-to-port mapping, and GNS3 topology deployment planning.
+
 ## Planned Workflow
 
 ```text
@@ -308,6 +310,65 @@ cd backend
 python -c "import asyncio; from app.gns3.client import GNS3Client; async def main():\n    async with GNS3Client() as client:\n        version = await client.get_version(); print(version.version, version.local)\nasyncio.run(main())"
 ```
 
+## Sprint 4 Deliverables
+
+- platform profiles for `IOSv`, `IOSvL2`, and `VPCS`
+- interface-to-port mapping service
+- deterministic topology coordinate assignment
+- dry-run topology deployment planner
+- link creation requests derived from `TopologySpec`
+- deployment result device mapping
+- mocked deployment tests for layout, mapping, and orchestration
+
+## Sprint 4 Usage
+
+### GNS3 Preflight Before Sprint 4
+
+Make sure these template conditions are true in GNS3:
+
+- `IOSv` template exists
+- `IOSvL2` template exists
+- `VPCS` template exists
+- `IOSv` adapters >= `4`
+- `IOSvL2` adapters >= `8`
+
+Re-check templates:
+
+```powershell
+Invoke-WebRequest http://[::1]:3080/v2/templates -UseBasicParsing
+```
+
+### Run Only Sprint 4 Deployment Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+pytest tests/test_gns3_deployment.py -q
+```
+
+### Build a Dry-Run Topology Deployment Plan
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.topology.service import TopologyService; from app.gns3.profiles import PlatformProfileLoader, PortMappingService; from app.gns3.deployment import TopologyDeploymentPlanner, TopologyLayoutService; spec = TopologyService.load_file(Path('..') / 'examples' / 'three-vlan-office.yaml'); planner = TopologyDeploymentPlanner(PlatformProfileLoader(), PortMappingService(PlatformProfileLoader()), TopologyLayoutService()); plan = planner.build_plan(spec); print(plan.model_dump_json(indent=2))"
+```
+
+### Validate Interface Mapping for a Logical Interface
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from app.gns3.profiles import PlatformProfileLoader, PortMappingService; service = PortMappingService(PlatformProfileLoader()); mapping = service.resolve('iosv', 'GigabitEthernet0/1'); print(mapping.adapter_number, mapping.port_number)"
+```
+
+Expected output:
+
+```text
+1 0
+```
+
 ## Current Status
 
 Current implementation includes:
@@ -316,5 +377,6 @@ Current implementation includes:
 - Sprint 1 topology domain model and validation
 - Sprint 2 VLSM and IP addressing planner
 - Sprint 3 GNS3 client and resource management layer
+- Sprint 4 topology deployment and port mapping engine
 
 Business logic for GNS3 deployment, configuration application, discovery, simulation, and impact analysis is still deferred to later sprints.

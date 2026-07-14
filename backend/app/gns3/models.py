@@ -144,4 +144,4 @@ class GNS3DeploymentResult(BaseModel):
     project: GNS3Project
     node_mappings: list[GNS3DomainNodeMapping]
     links: list[GNS3Link]
-
+    devices: dict[str, str] = Field(default_factory=dict)

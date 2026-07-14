@@ -1,6 +1,7 @@
 """GNS3 integration layer."""
 
 from app.gns3.client import GNS3Client
+from app.gns3.deployment import TopologyDeploymentPlanner, TopologyLayoutService
 from app.gns3.exceptions import (
     GNS3ConnectionError,
     GNS3DeploymentError,
@@ -18,6 +19,7 @@ from app.gns3.models import (
     GNS3Project,
     GNS3Template,
 )
+from app.gns3.profiles import PlatformProfileLoader, PortMappingService
 from app.gns3.services import (
     GNS3DeploymentOrchestrator,
     GNS3LinkService,
@@ -39,6 +41,8 @@ __all__ = [
     "GNS3LinkService",
     "GNS3NodeDeploymentRequest",
     "GNS3NodeService",
+    "PlatformProfileLoader",
+    "PortMappingService",
     "GNS3Project",
     "GNS3ProjectService",
     "GNS3RequestError",
@@ -46,4 +50,6 @@ __all__ = [
     "GNS3Template",
     "GNS3TemplateNotFoundError",
     "GNS3TemplateResolver",
+    "TopologyDeploymentPlanner",
+    "TopologyLayoutService",
 ]
