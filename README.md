@@ -16,6 +16,8 @@ Sprint 5 adds Jinja2-based configuration generation, per-device rendering contex
 
 Sprint 6 adds configuration deployment over Telnet console sessions, prompt detection, CLI discovery, adapter-based parsing, and discovered network state snapshots.
 
+Sprint 7 adds a NetworkX-based digital twin graph engine, multi-layer graph views, graph queries, and React Flow serialization.
+
 ## Planned Workflow
 
 ```text
@@ -502,6 +504,406 @@ cd backend
 python -c "from app.discovery.parsers import DiscoveryParserRegistry; parser = DiscoveryParserRegistry(); output = 'Interface                  IP-Address      OK? Method Status                Protocol\\nGigabitEthernet0/0         unassigned      YES unset  administratively down down\\nGigabitEthernet0/1         10.0.0.1        YES manual up                    up\\n'; print(parser.parse_ip_interface_brief(output))"
 ```
 
+## Sprint 7 Deliverables
+
+- NetworkX digital twin graph engine
+- desired-state graph construction from `TopologySpec`
+- discovered-state graph construction from `DiscoveredNetworkState`
+- graph views for physical, layer 2, layer 3, dependency, and service topology
+- graph queries for VLAN membership, trunks, dependencies, paths, and disconnected components
+- React Flow serialization
+- graph engine tests
+
+## Sprint 7 Usage
+
+### Install Sprint 7 Dependencies
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+```
+
+### Run Only Sprint 7 Graph Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_graph_service.py -q
+```
+
+### Build a Desired Graph from the Three-VLAN Office Example
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.graph.service import GraphService; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'three-vlan-office.yaml'); graph = GraphService().build_from_topology(spec); print(graph.number_of_nodes(), graph.number_of_edges())"
+```
+
+### Query Endpoints Inside VLAN 30
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.graph.service import GraphService; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'three-vlan-office.yaml'); service = GraphService(); graph = service.build_from_topology(spec); print(service.endpoints_in_vlan(graph, 30))"
+```
+
+### Export Layer 2 View for React Flow
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.graph.service import GraphService; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'three-vlan-office.yaml'); service = GraphService(); graph = service.build_from_topology(spec); layer2 = service.get_view(graph, 'layer2'); payload = service.to_react_flow(layer2); print(payload.model_dump_json(indent=2))"
+```
+
+## GNS3 Console Command Reference
+
+The following device console commands were used during Sprint 6-8 preflight work in GNS3. These are not backend shell commands; they are typed inside the router, switch, and VPCS consoles.
+
+### Router Base Commands
+
+`enable`
+- Moves from user EXEC mode (`Router>`) to privileged EXEC mode (`Router#`).
+- Needed before most inspection and configuration commands.
+
+`terminal length 0`
+- Disables pagination so `show` outputs print fully.
+- Important for automation because parsers should not stop on `--More--`.
+
+`show ip interface brief`
+- Prints interface names, IP addresses, and administrative/operational state.
+- Used to verify whether a gateway or routed interface is `up/up`, `down/down`, or `administratively down`.
+
+`show running-config`
+- Prints the current live configuration in RAM.
+- Used to confirm whether generated configuration was really applied.
+
+`show ip route`
+- Prints the current routing table.
+- Used to check connected routes, static routes, longest-prefix matches, and whether a default route exists.
+
+`show access-lists`
+- Prints ACL definitions and hit counters when available.
+- Used to validate whether a deny/permit rule exists and whether traffic should be blocked.
+
+`show ip ospf neighbor`
+- Prints OSPF neighbor adjacency information.
+- Used to verify whether routing adjacency formed correctly.
+
+### Router Configuration Commands
+
+`configure terminal`
+- Enters global configuration mode (`Router(config)#`).
+- Required before interface, ACL, routing, and other config statements.
+
+`hostname R1`
+- Renames the router prompt and running configuration hostname.
+- Useful to make automation prompts deterministic and readable.
+
+`interface GigabitEthernet0/0`
+- Enters the physical interface context.
+- Used before enabling the trunk parent interface for router-on-a-stick.
+
+`no shutdown`
+- Administratively enables an interface.
+- Without this command, interfaces remain shut and traffic cannot flow.
+
+`interface GigabitEthernet0/0.10`
+- Enters subinterface configuration mode.
+- Used for router-on-a-stick inter-VLAN routing.
+
+`encapsulation dot1Q 10`
+- Tags the subinterface for VLAN 10 using IEEE 802.1Q.
+- This is what binds a router subinterface to a VLAN carried over a trunk.
+
+`ip address 192.168.10.1 255.255.255.0`
+- Assigns the Layer 3 gateway address to that interface or subinterface.
+- Endpoints in the subnet use this as the default gateway.
+
+`end`
+- Leaves configuration mode and returns to privileged EXEC mode.
+- Commonly used after finishing a config block.
+
+`write memory`
+- Saves the current running configuration to startup configuration.
+- Important because Sprint 6 and later compare intended state against the active device state.
+
+### Switch Base Commands
+
+`show vlan brief`
+- Lists VLAN IDs, names, status, and access port membership.
+- Used to verify whether PC-facing ports are actually placed in the expected VLAN.
+
+`show interfaces trunk`
+- Shows trunk ports, encapsulation, native VLAN, and allowed VLAN lists.
+- Used to validate whether VLANs can traverse the switch uplink toward the router.
+
+### Switch Configuration Commands
+
+`vlan 10`
+- Creates or enters VLAN 10 configuration.
+- Needed before assigning access ports to that VLAN.
+
+`name VLAN10`
+- Assigns a human-readable VLAN name.
+- Makes verification output easier to interpret.
+
+`interface GigabitEthernet0/1`
+- Enters the uplink interface connected to the router.
+- Usually configured as a trunk in router-on-a-stick topologies.
+
+`switchport trunk encapsulation dot1q`
+- Sets 802.1Q as the trunk encapsulation.
+- Required on platforms that support choosing trunk encapsulation.
+
+`switchport mode trunk`
+- Forces the interface into trunk mode.
+- Allows multiple VLANs to pass over the uplink.
+
+`switchport trunk allowed vlan 10,20`
+- Restricts the trunk to VLANs 10 and 20.
+- Used directly in Sprint 8 reachability checks for VLAN propagation.
+
+`switchport mode access`
+- Forces an interface into access mode.
+- Used for endpoint-facing ports.
+
+`switchport access vlan 10`
+- Places the access port into VLAN 10.
+- Used to map an endpoint to the correct Layer 2 segment.
+
+### VPCS Commands
+
+`show`
+- Prints the current VPCS IP, mask, gateway, and basic status.
+- Used to verify endpoint addressing before runtime ping tests.
+
+`ip 192.168.10.10/24 192.168.10.1`
+- Configures the endpoint IP address and default gateway.
+- Required so runtime validation has a real source host to test from.
+
+`ping 192.168.20.10`
+- Sends ICMP echo requests from the endpoint to another host.
+- Used as the primary runtime reachability test in Sprint 8.
+
+### ACL Negative Test Commands
+
+`ip access-list extended BLOCK-PC1-PC2`
+- Creates a named extended ACL.
+- Used to build a negative test case where the model should predict blocked traffic.
+
+`deny ip host 192.168.10.10 host 192.168.20.10`
+- Explicitly blocks traffic from `PC1` to `PC2`.
+- This gives Sprint 8 a clean ACL-based failure scenario.
+
+`permit ip any any`
+- Allows all remaining traffic after the specific deny.
+- Prevents the ACL from accidentally blocking unrelated traffic during tests.
+
+`ip access-group BLOCK-PC1-PC2 in`
+- Attaches the ACL inbound on the source-side routed subinterface.
+- This is what makes the ACL actually affect live traffic.
+
+### What These Commands Proved
+
+- The router accepted configuration and show commands.
+- The switch trunk and access VLAN setup matched the intended design.
+- The endpoints had valid IP configuration and could be used for ping tests.
+- ACLs could be attached to a gateway interface to create deterministic blocked reachability cases.
+
+## Sprint 8 Deliverables
+
+- hybrid validation engine for model-based and runtime reachability
+- deterministic reachability stages for addressing, VLANs, trunks, gateways, routes, ACLs, and destination state
+- combined predicted/actual validation result model
+- mismatch detection between model and runtime outcomes
+- positive and negative validation tests
+
+## Sprint 8 Usage
+
+### Install Sprint 8 Dependencies
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+```
+
+### Run Only Sprint 8 Validation Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_validation_service.py -q
+```
+
+### Run Sprint 7 and Sprint 8 Together
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_graph_service.py tests/test_validation_service.py -q
+```
+
+### Validate a Reachable Path from Admin to Student
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "import asyncio; from pathlib import Path; from app.topology.service import TopologyService; from app.validation.service import ValidationService; async def main():\n    spec = TopologyService.load_file(Path('..') / 'examples' / 'three-vlan-office.yaml'); result = await ValidationService().validate_connectivity(spec, source_endpoint_id='admin-endpoint', target_endpoint_id='student-endpoint'); print(result.model_dump_json(indent=2))\nasyncio.run(main())"
+```
+
+### Validate an ACL-Blocked Path from Guest to Admin
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "import asyncio; from pathlib import Path; from app.topology.service import TopologyService; from app.validation.service import ValidationService; async def main():\n    spec = TopologyService.load_file(Path('..') / 'examples' / 'guest-isolation.yaml'); result = await ValidationService().validate_connectivity(spec, source_endpoint_id='guest-endpoint-1', target_endpoint_id='admin-endpoint'); print(result.model_dump_json(indent=2))\nasyncio.run(main())"
+```
+
+### What Sprint 8 Validates
+
+- source endpoint IP and gateway consistency
+- access VLAN membership on the switch
+- trunk propagation toward the gateway
+- gateway presence and interface availability
+- connected or longest-prefix route selection
+- ACL allow/deny decision
+- destination-side availability
+- optional runtime mismatch reporting
+
+## Sprint 9 Deliverables
+
+- typed network change command model
+- command validation and precondition checks
+- isolated apply and undo behavior
+- machine-readable serialization
+- human-readable summaries and diffs
+
+## Sprint 10 Deliverables
+
+- immutable change simulation service
+- before/after reachability comparison
+- direct and indirect impact detection
+- changed validation test detection
+- redundancy awareness
+
+## Sprint 11 Deliverables
+
+- weighted and explainable risk scoring
+- deterministic risk level classification
+- recommendation generation
+- maintenance window guidance
+- rollback readiness guidance
+
+## Sprint 11 Usage
+
+### Activate the Backend Environment
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+```
+
+What this does:
+
+- moves into the backend project directory
+- activates the project virtual environment
+- makes sure `pytest` and project dependencies resolve from `.venv`
+
+### Run Only Sprint 10 Simulation Tests
+
+```powershell
+pytest tests/test_simulation_service.py -q
+```
+
+What this validates:
+
+- VLAN deletion impact detection
+- trunk VLAN removal impact detection
+- interface shutdown impact detection
+- static route removal impact detection
+- ACL rule removal impact detection
+
+Why this matters for Sprint 11:
+
+- Sprint 11 reads Sprint 10 simulation output
+- if Sprint 10 is broken, the risk score is not trustworthy
+
+### Run Only Sprint 11 Risk Tests
+
+```powershell
+pytest tests/test_risk_service.py -q
+```
+
+What this validates:
+
+- a destructive change like `DeleteVLANCommand` produces a high or critical risk result
+- the engine returns a deterministic recommendation such as `Do not apply`
+- critical services contribute to the final score explanation
+- a lighter change can produce a lower score than a destructive one
+- a low-impact change such as enabling an interface can stay in the `Low` band
+
+### Run the Full Sprint 9 to Sprint 11 Chain
+
+```powershell
+pytest tests/test_change_commands.py -q
+pytest tests/test_validation_service.py -q
+pytest tests/test_simulation_service.py -q
+pytest tests/test_risk_service.py -q
+```
+
+What each command proves:
+
+- `pytest tests/test_change_commands.py -q`
+  - command objects validate correctly
+  - invalid changes are rejected before simulation
+  - undo behavior restores the previous topology state
+- `pytest tests/test_validation_service.py -q`
+  - model-based reachability logic still works
+  - ACL, VLAN, gateway, and route checks behave correctly
+- `pytest tests/test_simulation_service.py -q`
+  - the simulated before/after change analysis is correct
+  - direct and indirect impacts are captured
+- `pytest tests/test_risk_service.py -q`
+  - risk scoring, explanations, and recommendations are stable
+
+Why this order is useful:
+
+- Sprint 9 builds the command object
+- Sprint 8 validation logic predicts network behavior
+- Sprint 10 simulates the change with that validation engine
+- Sprint 11 scores the simulation result
+
+### Repair the Virtual Environment If Python Path Errors Appear
+
+If commands fail because `.venv` points to a broken Windows Python path, rebuild it:
+
+```powershell
+deactivate
+Remove-Item -Recurse -Force .venv
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+pytest tests/test_risk_service.py -q
+```
+
+What this fixes:
+
+- recreates the virtual environment with a clean Python interpreter binding
+- reinstalls backend dependencies and developer test tools
+- verifies the repaired environment by running the Sprint 11 risk tests
+
+### Expected Sprint 11 Interpretation
+
+When the tests pass, the project now supports this chain:
+
+- create a typed network change command
+- simulate it on an isolated topology snapshot
+- compare before and after reachability
+- identify direct and indirect impacts
+- convert those impacts into an explainable risk score and recommendation
+
 ## Current Status
 
 Current implementation includes:
@@ -513,5 +915,10 @@ Current implementation includes:
 - Sprint 4 topology deployment and port mapping engine
 - Sprint 5 configuration generation engine
 - Sprint 6 configuration deployment and discovery foundation
+- Sprint 7 digital twin graph engine
+- Sprint 8 hybrid reachability and validation foundation
+- Sprint 9 typed network change commands
+- Sprint 10 immutable change simulation and impact analysis
+- Sprint 11 explainable risk scoring and recommendations
 
 Business logic for GNS3 deployment, configuration application, discovery, simulation, and impact analysis is still deferred to later sprints.
