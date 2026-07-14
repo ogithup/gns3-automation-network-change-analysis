@@ -12,6 +12,8 @@ Sprint 3 adds the asynchronous GNS3 API client, template resolution, project/nod
 
 Sprint 4 adds deterministic topology layout, platform profiles, interface-to-port mapping, and GNS3 topology deployment planning.
 
+Sprint 5 adds Jinja2-based configuration generation, per-device rendering contexts, configuration preview output, deterministic hashes, and snapshot tests.
+
 ## Planned Workflow
 
 ```text
@@ -369,6 +371,57 @@ Expected output:
 1 0
 ```
 
+## Sprint 5 Deliverables
+
+- Jinja2 template registry for `iosv`, `iosvl2`, and `vpcs`
+- device context builder driven by `TopologySpec`
+- rendered configuration preview output
+- deterministic SHA-256 configuration hashes
+- basic rendered syntax validation
+- snapshot tests for generated configurations
+
+## Sprint 5 Usage
+
+### Install Sprint 5 Dependencies
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+```
+
+### Run Only Sprint 5 Configuration Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_configuration_generator.py -q
+```
+
+### Render Configuration Preview for the Three-VLAN Office
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.configuration.generator import ConfigurationRenderer; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'three-vlan-office.yaml'); print(ConfigurationRenderer().preview_text(spec))"
+```
+
+### Render a Single Device Configuration and Hash
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.configuration.generator import ConfigurationRenderer; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'three-vlan-office.yaml'); renderer = ConfigurationRenderer(); device = next(item for item in spec.devices if item.id == 'r1'); rendered = renderer.render_device(spec, device); print(rendered.content); print(rendered.content_hash)"
+```
+
+### Validate OSPF Rendering on the Two-Router Example
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -c "from pathlib import Path; from app.configuration.generator import ConfigurationRenderer; from app.topology.service import TopologyService; spec = TopologyService.load_file(Path('..') / 'examples' / 'two-router-ospf.yaml'); preview = ConfigurationRenderer().render_topology(spec); print(next(item.content for item in preview.rendered_configurations if item.device_id == 'r1'))"
+```
+
 ## Current Status
 
 Current implementation includes:
@@ -378,5 +431,6 @@ Current implementation includes:
 - Sprint 2 VLSM and IP addressing planner
 - Sprint 3 GNS3 client and resource management layer
 - Sprint 4 topology deployment and port mapping engine
+- Sprint 5 configuration generation engine
 
 Business logic for GNS3 deployment, configuration application, discovery, simulation, and impact analysis is still deferred to later sprints.

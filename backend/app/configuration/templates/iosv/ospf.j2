@@ -1,0 +1,7 @@
+{% for process in ospf %}
+router ospf {{ process.process_id }}
+{% for network in process.networks %}
+ network {{ network.network }} {{ network.wildcard_mask }} area {{ network.area }}
+{% endfor %}
+!
+{% endfor %}

@@ -1,0 +1,11 @@
+hostname {{ hostname }}
+{% if vlans %}
+{% include "iosvl2/vlan.j2" %}
+{% endif %}
+{% if access_ports %}
+{% include "iosvl2/access_ports.j2" %}
+{% endif %}
+{% if trunk_ports %}
+{% include "iosvl2/trunk.j2" %}
+{% endif %}
+end

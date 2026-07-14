@@ -1,0 +1,16 @@
+{% for subinterface in subinterfaces %}
+interface {{ subinterface.name }}
+ encapsulation dot1Q {{ subinterface.vlan_id }}
+{% if subinterface.description %}
+ description {{ subinterface.description }}
+{% endif %}
+{% if subinterface.ip_address and subinterface.subnet_mask %}
+ ip address {{ subinterface.ip_address }} {{ subinterface.subnet_mask }}
+{% endif %}
+{% if subinterface.enabled %}
+ no shutdown
+{% else %}
+ shutdown
+{% endif %}
+!
+{% endfor %}

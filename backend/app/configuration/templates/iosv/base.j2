@@ -1,0 +1,27 @@
+hostname {{ hostname }}
+{% include "iosv/interfaces.j2" %}
+{% include "iosv/router_on_a_stick.j2" %}
+{% if dhcp_pools %}
+{% for pool in dhcp_pools %}
+ip dhcp pool {{ pool.name }}
+ network {{ pool.network }} {{ pool.subnet_mask }}
+ default-router {{ pool.default_router }}
+{% if pool.dns_servers %}
+ dns-server {{ pool.dns_servers | join(" ") }}
+{% endif %}
+!
+{% endfor %}
+{% endif %}
+{% if acls %}
+{% include "iosv/acl.j2" %}
+{% endif %}
+{% if static_routes %}
+{% for route in static_routes %}
+ip route {{ route.destination_network }} {{ route.subnet_mask }}{% if route.next_hop %} {{ route.next_hop }}{% endif %}{% if route.outgoing_interface %} {{ route.outgoing_interface }}{% endif %}
+{% endfor %}
+!
+{% endif %}
+{% if ospf %}
+{% include "iosv/ospf.j2" %}
+{% endif %}
+end

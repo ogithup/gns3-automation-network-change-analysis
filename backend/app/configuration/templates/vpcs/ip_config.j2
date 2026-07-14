@@ -1,0 +1,3 @@
+set pcname {{ hostname }}
+ip {{ endpoint_ip_address }} {{ endpoint_subnet_mask }}{{ (" " ~ endpoint_gateway) if endpoint_gateway else "" }}
+save

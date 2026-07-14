@@ -1,0 +1,7 @@
+{% for acl in acls %}
+ip access-list {{ acl.acl_type }} {{ acl.name }}
+{% for rule in acl.rules %}
+ {{ rule.action }} {{ rule.protocol }} {{ rule.source }}{% if acl.acl_type == "extended" %} {{ rule.destination }}{% endif %}{% if rule.source_port %} eq {{ rule.source_port }}{% endif %}{% if rule.destination_port %} eq {{ rule.destination_port }}{% endif %}
+{% endfor %}
+!
+{% endfor %}

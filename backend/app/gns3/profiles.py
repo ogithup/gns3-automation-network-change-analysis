@@ -45,10 +45,10 @@ class PlatformProfileLoader:
                     "GigabitEthernet0/1": InterfacePortMapping(adapter_number=1, port_number=0),
                     "GigabitEthernet0/2": InterfacePortMapping(adapter_number=2, port_number=0),
                     "GigabitEthernet0/3": InterfacePortMapping(adapter_number=3, port_number=0),
-                    "GigabitEthernet1/0": InterfacePortMapping(adapter_number=4, port_number=0),
-                    "GigabitEthernet1/1": InterfacePortMapping(adapter_number=5, port_number=0),
-                    "GigabitEthernet1/2": InterfacePortMapping(adapter_number=6, port_number=0),
-                    "GigabitEthernet1/3": InterfacePortMapping(adapter_number=7, port_number=0),
+                    "GigabitEthernet0/4": InterfacePortMapping(adapter_number=4, port_number=0),
+                    "GigabitEthernet0/5": InterfacePortMapping(adapter_number=5, port_number=0),
+                    "GigabitEthernet0/6": InterfacePortMapping(adapter_number=6, port_number=0),
+                    "GigabitEthernet0/7": InterfacePortMapping(adapter_number=7, port_number=0),
                 },
             ),
             "vpcs": PlatformProfile(
@@ -84,4 +84,3 @@ class PortMappingService:
             raise GNS3DeploymentError(
                 f"Interface '{interface_name}' is not mapped for platform '{platform}'",
             ) from error
-
