@@ -22,9 +22,9 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     gns3_server_url: str = "http://localhost:3080"
     gns3_request_timeout: float = Field(default=10.0, gt=0)
+    gns3_retry_attempts: int = Field(default=2, ge=0)
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-
