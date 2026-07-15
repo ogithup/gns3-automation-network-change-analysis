@@ -20,6 +20,9 @@ export default [
         document: "readonly",
         fetch: "readonly",
         console: "readonly",
+        crypto: "readonly",
+        localStorage: "readonly",
+        WebSocket: "readonly",
       },
     },
     plugins: {
@@ -30,6 +33,8 @@ export default [
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+      "no-undef": "off",
+      "no-unused-vars": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
     },
   },
