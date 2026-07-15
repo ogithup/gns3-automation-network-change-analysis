@@ -8,8 +8,12 @@ __pycache__/
 dist/
 build/
 coverage/
+htmlcov/
+playwright-report/
+test-results/
 node_modules/
 .env
 *.pyc
 *.pyo
 *.log
+~$*.docx

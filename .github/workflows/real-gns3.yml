@@ -1,0 +1,30 @@
+name: Optional Real GNS3 Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      gns3_server_url:
+        description: "GNS3 server URL"
+        required: false
+        default: "http://localhost:3080"
+
+jobs:
+  real-gns3:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      NETTWIN_RUN_REAL_GNS3: "1"
+      GNS3_SERVER_URL: ${{ inputs.gns3_server_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+      - name: Run optional real GNS3 test
+        run: pytest tests/test_real_gns3_optional.py -q

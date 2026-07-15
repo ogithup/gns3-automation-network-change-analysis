@@ -160,6 +160,12 @@ async def test_orchestrator_deploys_project_nodes_and_links() -> None:
             )
         if request.url.path == "/v2/projects/proj-1/links":
             return _json_response(200, {"link_id": "link-1"})
+        if request.url.path == "/v2/projects/proj-1/nodes/node-r1/start":
+            return _json_response(200, {"node_id": "node-r1", "name": "R1", "status": "started"})
+        if request.url.path == "/v2/projects/proj-1/nodes/node-pc1/start":
+            return _json_response(200, {"node_id": "node-pc1", "name": "PC1", "status": "started"})
+        if request.url.path == "/v2/projects/proj-1" and request.method == "DELETE":
+            return _json_response(204, {})
 
         raise AssertionError(f"Unexpected request: {request.method} {request.url.path}")
 

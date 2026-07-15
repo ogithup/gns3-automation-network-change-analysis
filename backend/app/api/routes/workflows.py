@@ -6,12 +6,20 @@ from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 
 from app.addressing.models import AddressingPlan, AddressingRequest
 from app.api.models import (
+    AIExplanationRequest,
+    AIExplanationResponse,
     ApprovalRequest,
     ChangeCreateRequest,
     ChangeRecordResponse,
     DeploymentCreateRequest,
     DeploymentRecordResponse,
+    GeneratedReportResponse,
     GNS3ConnectivityResponse,
+    NaturalLanguageChangeRequest,
+    NaturalLanguageChangeResponse,
+    NaturalLanguageTopologyRequest,
+    NaturalLanguageTopologyResponse,
+    ReportGenerateRequest,
     ReportResponse,
     RootCauseRequest,
     SpecificationValidateRequest,
@@ -53,6 +61,49 @@ async def create_ip_plan(
     workflow_service: WorkflowService = Depends(get_workflow_service),
 ) -> AddressingPlan:
     return workflow_service.create_ip_plan(request_body)
+
+
+@router.post("/ai/topology", response_model=NaturalLanguageTopologyResponse)
+async def interpret_topology_prompt(
+    request_body: NaturalLanguageTopologyRequest,
+    workflow_service: WorkflowService = Depends(get_workflow_service),
+) -> NaturalLanguageTopologyResponse:
+    return NaturalLanguageTopologyResponse(
+        interpretation=workflow_service.interpret_topology_prompt(
+            request_body.prompt,
+            context=request_body.context,
+        ),
+    )
+
+
+@router.post("/ai/change", response_model=NaturalLanguageChangeResponse)
+async def interpret_change_prompt(
+    request_body: NaturalLanguageChangeRequest,
+    workflow_service: WorkflowService = Depends(get_workflow_service),
+) -> NaturalLanguageChangeResponse:
+    specification = (
+        workflow_service.load_topology(specification=request_body.specification)
+        if request_body.specification is not None
+        else None
+    )
+    return NaturalLanguageChangeResponse(
+        interpretation=workflow_service.interpret_change_prompt(
+            request_body.prompt,
+            deployment_id=request_body.deployment_id,
+            specification=specification,
+            context=request_body.context,
+        ),
+    )
+
+
+@router.post("/ai/explain", response_model=AIExplanationResponse)
+async def explain_deterministic_results(
+    request_body: AIExplanationRequest,
+    workflow_service: WorkflowService = Depends(get_workflow_service),
+) -> AIExplanationResponse:
+    return AIExplanationResponse(
+        explanation=workflow_service.explain_ai_results(request_body.model_dump(mode="json", exclude_none=True)),
+    )
 
 
 @router.post("/deployments", response_model=DeploymentRecordResponse)
@@ -219,6 +270,21 @@ async def get_report(
         change_id=record.change_id,
         validations=record.validations,
         root_causes=record.root_causes,
+    )
+
+
+@router.post("/reports/generate", response_model=GeneratedReportResponse)
+async def generate_report(
+    request_body: ReportGenerateRequest,
+    workflow_service: WorkflowService = Depends(get_workflow_service),
+) -> GeneratedReportResponse:
+    return GeneratedReportResponse(
+        report=workflow_service.generate_report(
+            deployment_id=request_body.deployment_id,
+            change_id=request_body.change_id,
+            address_plan=request_body.address_plan,
+            user_requirements=request_body.user_requirements,
+        ),
     )
 
 

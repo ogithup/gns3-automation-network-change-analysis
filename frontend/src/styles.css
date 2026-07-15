@@ -350,12 +350,18 @@ a {
 }
 
 .field input,
-.field select {
+.field select,
+.textarea {
   width: 100%;
   padding: 11px 12px;
   border: 1px solid rgba(86, 108, 128, 0.18);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.95);
+}
+
+.textarea {
+  min-height: 110px;
+  resize: vertical;
 }
 
 .builder-toolbar {
@@ -459,6 +465,15 @@ a {
 .inline-note {
   color: #50657a;
   line-height: 1.6;
+}
+
+.report-preview {
+  overflow: auto;
+  max-height: 480px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(20, 32, 49, 0.08);
+  background: rgba(255, 255, 255, 0.94);
 }
 
 @media (max-width: 1100px) {

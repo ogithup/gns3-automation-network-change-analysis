@@ -3,8 +3,12 @@ import {
   AddressingRequest,
   ApprovalRecord,
   ChangeRecordResponse,
+  DeterministicExplanation,
   DeploymentRecordResponse,
+  GeneratedReport,
   Gns3ConnectivityResponse,
+  InterpretedChangePlan,
+  InterpretedTopologyPlan,
   ReportResponse,
   RootCauseAnalysisResult,
   SpecificationValidateResponse,
@@ -145,6 +149,53 @@ export const workflowClient = {
 
   getReport(reportId: string) {
     return requestJson<ReportResponse>(`/reports/${reportId}`);
+  },
+
+  interpretTopology(prompt: string, context?: Record<string, unknown>) {
+    return requestJson<{ interpretation: InterpretedTopologyPlan }>("/ai/topology", {
+      method: "POST",
+      body: JSON.stringify({ prompt, context }),
+    });
+  },
+
+  interpretChange(prompt: string, payload: { deploymentId?: string; specification?: TopologySpec; context?: Record<string, unknown> }) {
+    return requestJson<{ interpretation: InterpretedChangePlan }>("/ai/change", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt,
+        deployment_id: payload.deploymentId,
+        specification: payload.specification,
+        context: payload.context,
+      }),
+    });
+  },
+
+  explainDeterministicResults(payload: {
+    simulation?: Record<string, unknown>;
+    risk?: Record<string, unknown>;
+    validations?: Array<Record<string, unknown>>;
+  }) {
+    return requestJson<{ explanation: DeterministicExplanation }>("/ai/explain", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  generateReport(payload: {
+    deploymentId?: string;
+    changeId?: string;
+    addressPlan?: AddressingPlan | null;
+    userRequirements?: string[];
+  }) {
+    return requestJson<{ report: GeneratedReport }>("/reports/generate", {
+      method: "POST",
+      body: JSON.stringify({
+        deployment_id: payload.deploymentId,
+        change_id: payload.changeId,
+        address_plan: payload.addressPlan,
+        user_requirements: payload.userRequirements ?? [],
+      }),
+    });
   },
 };
 

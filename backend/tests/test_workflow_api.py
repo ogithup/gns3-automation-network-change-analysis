@@ -45,6 +45,13 @@ def _sample_spec() -> dict:
 def test_workflow_api_end_to_end() -> None:
     client = TestClient(app)
 
+    ai_topology_response = client.post(
+        "/api/v1/ai/topology",
+        json={"prompt": "Üç VLAN'lı küçük ofis ağı kur. Guest ağı Admin ağına erişemesin."},
+    )
+    assert ai_topology_response.status_code == 200
+    assert ai_topology_response.json()["interpretation"]["topology"]["project"]["name"] == "ai-three-vlan-office"
+
     validate_response = client.post("/api/v1/specifications/validate", json={"specification": _sample_spec()})
     assert validate_response.status_code == 200
 
@@ -68,9 +75,30 @@ def test_workflow_api_end_to_end() -> None:
     assert change_response.status_code == 200
     change_id = change_response.json()["id"]
 
+    ai_change_response = client.post(
+        "/api/v1/ai/change",
+        json={
+            "prompt": "STUDENT VLAN'ını trunk bağlantısından kaldır.",
+            "deployment_id": deployment_id,
+        },
+    )
+    assert ai_change_response.status_code == 200
+    assert ai_change_response.json()["interpretation"]["command"]["type"] == "REMOVE_VLAN_FROM_TRUNK"
+
     simulate_response = client.post(f"/api/v1/changes/{change_id}/simulate")
     assert simulate_response.status_code == 200
     assert simulate_response.json()["status"] == "Simulated"
+
+    explain_response = client.post(
+        "/api/v1/ai/explain",
+        json={
+            "simulation": simulate_response.json()["simulation"],
+            "risk": simulate_response.json()["risk"],
+            "validations": [],
+        },
+    )
+    assert explain_response.status_code == 200
+    assert "summary" in explain_response.json()["explanation"]
 
     approve_response = client.post(f"/api/v1/changes/{change_id}/approve", json={"reviewer": "tester", "approved": True})
     assert approve_response.status_code == 200
@@ -84,6 +112,17 @@ def test_workflow_api_end_to_end() -> None:
         json={"source_endpoint_id": "admin-endpoint", "target_endpoint_id": "student-endpoint"},
     )
     assert root_cause_response.status_code == 200
+
+    report_response = client.post(
+        "/api/v1/reports/generate",
+        json={
+            "deployment_id": deployment_id,
+            "change_id": change_id,
+            "user_requirements": ["Guest VLAN impact review"],
+        },
+    )
+    assert report_response.status_code == 200
+    assert "<html>" in report_response.json()["report"]["html_content"]
 
 
 def test_workflow_progress_websocket_replays_history() -> None:

@@ -1,6 +1,5 @@
-import { FormEvent, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 
 import { workflowClient, fetchHealth } from "../api/client";
 import { useWorkflowStore } from "../app/workflowStore";
@@ -10,10 +9,8 @@ import { useWorkflowProgress } from "../hooks/useWorkflowProgress";
 import {
   AddressingRequest,
   ChangeCommandPayload,
-  ChangeRecordResponse,
-  ConnectivityRequirement,
-  DeploymentRecordResponse,
-  DeviceType,
+  DeterministicExplanation,
+  GeneratedReport,
   RootCauseAnalysisResult,
   TopologySpec,
   WorkflowProgressEvent,
@@ -55,6 +52,14 @@ function topologySummary(topology: TopologySpec) {
     { label: "VLANs", value: topology.vlans.length },
     { label: "Endpoints", value: topology.endpoints.length },
   ];
+}
+
+function validationLabel(topology: TopologySpec, index: number) {
+  const requirement = topology.connectivity_requirements[index];
+  if (!requirement) {
+    return `Validation ${index + 1}`;
+  }
+  return `${requirement.source_endpoint_id} -> ${requirement.target_endpoint_id}`;
 }
 
 export function OverviewPage() {
@@ -180,6 +185,19 @@ export function ProjectsPage() {
 export function TopologyBuilderPage() {
   const store = useWorkflowStore();
   const [projectName, setProjectName] = useState(store.topologyDraft.project.name);
+  const [prompt, setPrompt] = useState("Üç VLAN'lı küçük ofis ağı kur. Guest ağı Admin ağına erişemesin.");
+  const interpretTopologyMutation = useMutation({
+    mutationFn: (inputPrompt: string) =>
+      workflowClient.interpretTopology(inputPrompt, {
+        current_topology: store.topologyDraft,
+      }),
+    onSuccess: (response) => {
+      if (response.interpretation.topology) {
+        store.setTopologyDraft(response.interpretation.topology);
+        setProjectName(response.interpretation.topology.project.name);
+      }
+    },
+  });
 
   const saveName = () => {
     store.updateProjectName(projectName);
@@ -213,6 +231,18 @@ export function TopologyBuilderPage() {
 
       <SectionCard title="Validation-safe Draft JSON" subtitle="The UI edits a vendor-neutral topology specification that can be sent directly to the backend.">
         <JsonPanel value={store.topologyDraft} />
+      </SectionCard>
+
+      <SectionCard
+        title="Natural Language Topology"
+        subtitle="Sprint 16 converts natural-language requirements into a validated TopologySpec preview."
+        actions={<button className="button" onClick={() => interpretTopologyMutation.mutate(prompt)}>Interpret Requirement</button>}
+      >
+        <label className="field">
+          <span>Requirement prompt</span>
+          <textarea className="textarea" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+        </label>
+        {interpretTopologyMutation.data ? <JsonPanel value={interpretTopologyMutation.data.interpretation} /> : <EmptyState title="No AI interpretation yet" description="Submit a topology prompt to see the structured preview, clarifications, and warnings." />}
       </SectionCard>
     </div>
   );
@@ -365,8 +395,8 @@ export function DeploymentPage() {
             <div className="metric-grid">
               <MetricTile label="Project" value={activeDeployment.project_name} tone="accent" />
               <MetricTile label="Status" value={activeDeployment.status} />
-              <MetricTile label="Dry-run nodes" value={activeDeployment.dry_run_plan?.node_requests.length ?? 0} />
-              <MetricTile label="Dry-run links" value={activeDeployment.dry_run_plan?.link_requests.length ?? 0} />
+              <MetricTile label="Dry-run nodes" value={activeDeployment.dry_run_plan?.node_requests?.length ?? 0} />
+              <MetricTile label="Dry-run links" value={activeDeployment.dry_run_plan?.link_requests?.length ?? 0} />
             </div>
             <div className="timeline">
               {events.map((event, index) => (
@@ -413,13 +443,13 @@ export function ValidationPage() {
   return (
     <div className="page-grid">
       <SectionCard title="Validation Results" subtitle="Model and runtime-style reachability output from Sprint 8.">
-        {!activeDeployment?.validations.length ? (
+        {!activeDeployment?.validations?.length ? (
           <EmptyState title="No validation results" description="Use Run Validation in the deployment flow to populate this screen." />
         ) : (
           <div className="list-grid">
-            {activeDeployment.validations.map((validation) => (
-              <article key={`${validation.source_endpoint_id}-${validation.target_endpoint_id}`} className="list-card list-card--static">
-                <strong>{validation.source_endpoint_id} {"->"} {validation.target_endpoint_id}</strong>
+            {activeDeployment.validations.map((validation, index) => (
+              <article key={`${validation.state}-${index}`} className="list-card list-card--static">
+                <strong>{validationLabel(activeDeployment.topology ?? defaultTopologyFallback(), index)}</strong>
                 <StatusPill value={validation.predicted_reachable ? "Reachable" : "Blocked"} tone={validation.predicted_reachable ? "success" : "danger"} />
                 <span>{validation.failure_stage ?? validation.state ?? "validated"}</span>
                 <small>{validation.technical_explanation ?? validation.suspected_reason ?? "No explanation."}</small>
@@ -441,6 +471,8 @@ export function ChangeBuilderPage() {
   const [vlanId, setVlanId] = useState("20");
   const [reviewerSource, setReviewerSource] = useState(topology.endpoints[0]?.id ?? "");
   const [reviewerTarget, setReviewerTarget] = useState(topology.endpoints[1]?.id ?? "");
+  const [naturalLanguagePrompt, setNaturalLanguagePrompt] = useState("STUDENT VLAN'ını trunk bağlantısından kaldır.");
+  const [explanation, setExplanation] = useState<DeterministicExplanation | null>(null);
 
   const createChangeMutation = useMutation({
     mutationFn: ({ deploymentId, payload }: { deploymentId: string; payload: ChangeCommandPayload }) =>
@@ -460,6 +492,39 @@ export function ChangeBuilderPage() {
       workflowClient.analyzeRootCause(changeId, source, target),
     onSuccess: (change) => {
       store.upsertChange(change);
+    },
+  });
+  const interpretChangeMutation = useMutation({
+    mutationFn: (prompt: string) =>
+      workflowClient.interpretChange(prompt, {
+        deploymentId: store.activeDeployment?.id,
+        specification: store.activeDeployment ? undefined : topology,
+      }),
+    onSuccess: (response) => {
+      const command = response.interpretation.command;
+      if (command?.type) {
+        setCommandType(String(command.type));
+        if (typeof command.device === "string") {
+          setDevice(command.device);
+        }
+        if (typeof command.interface === "string") {
+          setIface(command.interface);
+        }
+        if (typeof command.vlan_id === "number" || typeof command.vlan_id === "string") {
+          setVlanId(String(command.vlan_id));
+        }
+      }
+    },
+  });
+  const explainMutation = useMutation({
+    mutationFn: () =>
+      workflowClient.explainDeterministicResults({
+        simulation: store.activeChange?.simulation as Record<string, unknown> | undefined,
+        risk: store.activeChange?.risk as Record<string, unknown> | undefined,
+        validations: (store.activeDeployment?.validations ?? []) as Array<Record<string, unknown>>,
+      }),
+    onSuccess: (response) => {
+      setExplanation(response.explanation);
     },
   });
 
@@ -554,7 +619,25 @@ export function ChangeBuilderPage() {
             </select>
           </label>
         </div>
-        {store.activeChange?.root_causes.length ? <JsonPanel value={store.activeChange.root_causes} /> : <EmptyState title="No root-cause analysis yet" description="Run Analyze Root Cause after a simulated or applied change." />}
+        {store.activeChange?.root_causes?.length ? <JsonPanel value={store.activeChange.root_causes} /> : <EmptyState title="No root-cause analysis yet" description="Run Analyze Root Cause after a simulated or applied change." />}
+      </SectionCard>
+
+      <SectionCard
+        title="Natural Language Change"
+        subtitle="Sprint 16 converts natural-language change requests into typed NetworkChangeCommand previews."
+        actions={(
+          <div className="button-row">
+            <button className="button" onClick={() => interpretChangeMutation.mutate(naturalLanguagePrompt)}>Interpret Change</button>
+            <button className="button button--secondary" disabled={!store.activeChange?.simulation} onClick={() => explainMutation.mutate()}>Explain Result</button>
+          </div>
+        )}
+      >
+        <label className="field">
+          <span>Change request</span>
+          <textarea className="textarea" value={naturalLanguagePrompt} onChange={(event) => setNaturalLanguagePrompt(event.target.value)} />
+        </label>
+        {interpretChangeMutation.data ? <JsonPanel value={interpretChangeMutation.data.interpretation} /> : <EmptyState title="No interpreted change yet" description="Write a natural-language change request to populate the typed command preview." />}
+        {explanation ? <JsonPanel value={explanation} /> : null}
       </SectionCard>
     </div>
   );
@@ -604,9 +687,9 @@ export function RiskPage() {
           <>
             <div className="metric-grid">
               <MetricTile label="Risk score" value={risk.total_score} tone="danger" />
-              <MetricTile label="Level" value={risk.level} tone="accent" />
+              <MetricTile label="Level" value={risk.risk_level} tone="accent" />
               <MetricTile label="Recommendation" value={risk.recommendation} tone="accent" />
-              <MetricTile label="Maintenance" value={risk.maintenance_requirement} />
+              <MetricTile label="Maintenance" value={risk.suggested_maintenance_requirement} />
             </div>
             <JsonPanel value={risk} />
           </>
@@ -703,9 +786,22 @@ export function RollbackPage() {
 }
 
 export function AuditPage() {
-  const { activeDeployment, activeChange, progressEvents } = useWorkflowStore();
+  const { activeDeployment, activeChange, progressEvents, addressPlan } = useWorkflowStore();
   const deploymentEvents = activeDeployment ? progressEvents[activeDeployment.id] ?? [] : [];
   const changeEvents = activeChange ? progressEvents[activeChange.id] ?? [] : [];
+  const [generatedReport, setGeneratedReport] = useState<GeneratedReport | null>(null);
+  const generateReportMutation = useMutation({
+    mutationFn: () =>
+      workflowClient.generateReport({
+        deploymentId: activeDeployment?.id,
+        changeId: activeChange?.id,
+        addressPlan,
+        userRequirements: [activeDeployment?.project_name ?? "workflow report"],
+      }),
+    onSuccess: (response) => {
+      setGeneratedReport(response.report);
+    },
+  });
 
   return (
     <div className="page-grid">
@@ -731,7 +827,32 @@ export function AuditPage() {
       </SectionCard>
 
       <SectionCard title="Latest Root-Cause Evidence" subtitle="Any post-change failed validations and RCA output stay visible here.">
-        {activeChange?.root_causes.length ? <RootCauseView rootCauses={activeChange.root_causes} /> : <EmptyState title="No RCA output" description="Root-cause results will show up after the analysis step." />}
+        {activeChange?.root_causes?.length ? <RootCauseView rootCauses={activeChange.root_causes} /> : <EmptyState title="No RCA output" description="Root-cause results will show up after the analysis step." />}
+      </SectionCard>
+
+      <SectionCard
+        title="Generated Report"
+        subtitle="Sprint 17 creates HTML and PDF-ready report artifacts from topology, change, validation, and risk state."
+        actions={<button className="button" disabled={!activeDeployment} onClick={() => generateReportMutation.mutate()}>Generate Report</button>}
+      >
+        {generatedReport ? (
+          <div className="stack">
+            <div className="metric-grid">
+              <MetricTile label="Report title" value={generatedReport.title} tone="accent" />
+              <MetricTile label="Sections" value={generatedReport.sections.length} />
+            </div>
+            <div className="report-preview" dangerouslySetInnerHTML={{ __html: generatedReport.html_content }} />
+            <a
+              className="button button--secondary"
+              download={`${generatedReport.id}.pdf`}
+              href={`data:application/pdf;base64,${generatedReport.pdf_base64}`}
+            >
+              Download PDF
+            </a>
+          </div>
+        ) : (
+          <EmptyState title="No report generated" description="Generate a report after deployment and change analysis to preview the release-style artifact." />
+        )}
       </SectionCard>
     </div>
   );

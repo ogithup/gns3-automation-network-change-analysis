@@ -10,10 +10,12 @@ from app.discovery.models import DiscoveredNetworkState
 from app.domain.models import TopologySpec
 from app.gns3.models import GNS3DeploymentPlan
 from app.impact.models import RootCauseAnalysisResult
+from app.reporting.models import GeneratedReport
 from app.risk.models import RiskAssessment
 from app.rollback.models import ApprovalRecord
 from app.simulation.models import ChangeSimulationResult
 from app.validation.models import CombinedValidationResult
+from app.addressing.models import AddressingPlan
 
 
 @dataclass
@@ -24,6 +26,7 @@ class DeploymentRecord:
     topology: TopologySpec
     correlation_id: str | None = None
     dry_run_plan: GNS3DeploymentPlan | None = None
+    address_plan: AddressingPlan | None = None
     configuration_preview: ConfigurationPreview | None = None
     discovered_state: DiscoveredNetworkState | None = None
     validations: list[CombinedValidationResult] = field(default_factory=list)
@@ -51,6 +54,7 @@ class ReportRecord:
     change_id: str | None = None
     validations: list[CombinedValidationResult] = field(default_factory=list)
     root_causes: list[RootCauseAnalysisResult] = field(default_factory=list)
+    generated_report: GeneratedReport | None = None
 
 
 class InMemoryDeploymentRepository:
@@ -87,3 +91,6 @@ class InMemoryReportRepository:
 
     def get(self, report_id: str) -> ReportRecord:
         return self._items[report_id]
+
+    def list(self) -> list[ReportRecord]:
+        return list(self._items.values())

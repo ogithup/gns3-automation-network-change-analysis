@@ -262,17 +262,16 @@ export type DiscoveredNetworkState = {
 };
 
 export type ValidationResult = {
-  source_endpoint_id: string;
-  target_endpoint_id: string;
   predicted_reachable: boolean;
   actual_reachable?: boolean | null;
   failure_stage?: string | null;
   path?: string[] | null;
-  evaluated_routes?: string[] | null;
-  evaluated_acls?: string[] | null;
+  evaluated_routes?: Array<Record<string, unknown>> | null;
+  evaluated_acls?: Array<Record<string, unknown>> | null;
   state?: string | null;
   technical_explanation?: string | null;
   suspected_reason?: string | null;
+  runtime?: Record<string, unknown> | null;
 };
 
 export type SimulationImpact = {
@@ -282,14 +281,18 @@ export type SimulationImpact = {
   affected_subnets: string[];
   affected_endpoints: string[];
   affected_services: string[];
-  lost_paths: string[];
+  lost_reachability_paths: string[][];
   changed_validation_tests: string[];
   redundancy_available?: boolean | null;
 };
 
 export type ChangeSimulationResult = {
+  snapshot: {
+    name: string;
+    topology_yaml: string;
+  };
   command_type: string;
-  summary: string;
+  command_summary: string;
   direct_impacts: string[];
   indirect_impacts: string[];
   before_results: ValidationResult[];
@@ -299,17 +302,19 @@ export type ChangeSimulationResult = {
 
 export type RiskFactorScore = {
   factor: string;
-  score: number;
   weight: number;
+  raw_value: string | number | boolean;
+  normalized_score: number;
+  contribution: number;
   explanation: string;
 };
 
 export type RiskAssessment = {
   total_score: number;
-  level: string;
+  risk_level: string;
   recommendation: string;
-  maintenance_requirement: string;
-  rollback_readiness: string;
+  suggested_maintenance_requirement: string;
+  suggested_rollback_readiness: string;
   explanation: string[];
   factor_scores: RiskFactorScore[];
   direct_impacts: string[];
@@ -372,6 +377,20 @@ export type ReportResponse = {
   root_causes: RootCauseAnalysisResult[];
 };
 
+export type GeneratedReport = {
+  id: string;
+  title: string;
+  created_at: string;
+  html_content: string;
+  pdf_base64: string;
+  summary: string;
+  sections: Array<{
+    title: string;
+    summary: string;
+    data: Record<string, unknown>;
+  }>;
+};
+
 export type AddressingSegmentRequest = {
   name: string;
   host_count: number;
@@ -406,3 +425,43 @@ export type WorkflowProgressEvent = {
 };
 
 export type ChangeCommandPayload = Record<string, string | number | boolean | null | undefined>;
+
+export type ClarificationItem = {
+  field: string;
+  question: string;
+  reason: string;
+  options: string[];
+};
+
+export type SafetyFinding = {
+  source: string;
+  pattern: string;
+  detail: string;
+  severity: string;
+};
+
+export type InterpretedTopologyPlan = {
+  topology?: TopologySpec | null;
+  clarifications: ClarificationItem[];
+  warnings: string[];
+  safety_findings: SafetyFinding[];
+  blocked: boolean;
+  preview: Record<string, unknown>;
+};
+
+export type InterpretedChangePlan = {
+  command?: ChangeCommandPayload | null;
+  summary?: string | null;
+  clarifications: ClarificationItem[];
+  warnings: string[];
+  safety_findings: SafetyFinding[];
+  blocked: boolean;
+  preview: Record<string, unknown>;
+};
+
+export type DeterministicExplanation = {
+  summary: string;
+  bullets: string[];
+  warnings: string[];
+  next_actions: string[];
+};

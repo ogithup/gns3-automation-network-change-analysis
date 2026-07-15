@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.addressing.models import AddressingRequest
 from app.addressing.service import AddressingService
+from app.ai.service import AIService
 from app.api.progress import ProgressEventHub
 from app.api.repositories import (
     ChangeRecord,
@@ -49,6 +50,7 @@ from app.gns3.models import GNS3ConsoleInfo
 from app.gns3.profiles import PlatformProfileLoader, PortMappingService
 from app.gns3.services import GNS3DeploymentOrchestrator, GNS3LinkService, GNS3NodeService, GNS3ProjectService, GNS3TemplateResolver
 from app.impact.service import RootCauseAnalysisService
+from app.reporting.service import ReportingService
 from app.risk.service import RiskScoringService
 from app.rollback.models import ApprovalRecord
 from app.simulation.service import SimulationService
@@ -74,11 +76,13 @@ class WorkflowService:
         self.progress_hub = progress_hub or ProgressEventHub()
         self.topology_service = TopologyService()
         self.addressing_service = AddressingService()
+        self.ai_service = AIService()
         self.configuration_renderer = ConfigurationRenderer()
         self.validation_service = ValidationService()
         self.simulation_service = SimulationService()
         self.risk_service = RiskScoringService()
         self.root_cause_service = RootCauseAnalysisService()
+        self.reporting_service = ReportingService()
         self.gns3_client = gns3_client or GNS3Client()
         planner = TopologyDeploymentPlanner(
             PlatformProfileLoader(),
@@ -112,6 +116,28 @@ class WorkflowService:
 
     def create_ip_plan(self, request: AddressingRequest):
         return self.addressing_service.plan(request)
+
+    def interpret_topology_prompt(self, prompt: str, *, context: dict[str, object] | None = None):
+        return self.ai_service.interpret_topology_request(prompt, context=context)
+
+    def interpret_change_prompt(
+        self,
+        prompt: str,
+        *,
+        deployment_id: str | None = None,
+        specification: TopologySpec | None = None,
+        context: dict[str, object] | None = None,
+    ):
+        if deployment_id is not None:
+            topology = self.get_deployment(deployment_id).topology
+        elif specification is not None:
+            topology = specification
+        else:
+            raise ValueError("A deployment_id or specification is required for change interpretation.")
+        return self.ai_service.interpret_change_request(prompt, topology=topology, context=context)
+
+    def explain_ai_results(self, payload: dict[str, object]):
+        return self.ai_service.explain_deterministic_results(payload=payload)
 
     async def create_deployment(self, *, project_name: str, topology: TopologySpec, correlation_id: str | None) -> DeploymentRecord:
         deployment_id = str(uuid4())
@@ -289,6 +315,39 @@ class WorkflowService:
 
     def get_report(self, report_id: str) -> ReportRecord:
         return self.report_repository.get(report_id)
+
+    def generate_report(
+        self,
+        *,
+        deployment_id: str | None = None,
+        change_id: str | None = None,
+        address_plan=None,
+        user_requirements: list[str] | None = None,
+    ):
+        deployment = self.get_deployment(deployment_id) if deployment_id is not None else None
+        change = self.get_change(change_id) if change_id is not None else None
+        report_record = None
+        for item in self.report_repository.list():
+            if deployment_id is not None and item.deployment_id == deployment_id:
+                if change_id is None or item.change_id == change_id:
+                    report_record = item
+        generated = self.reporting_service.generate_report(
+            deployment=deployment,
+            change=change,
+            report_record=report_record,
+            address_plan=address_plan,
+            user_requirements=user_requirements,
+        )
+        stored_record = ReportRecord(
+            id=generated.id,
+            deployment_id=deployment_id,
+            change_id=change_id,
+            validations=report_record.validations if report_record else [],
+            root_causes=report_record.root_causes if report_record else [],
+            generated_report=generated,
+        )
+        self.report_repository.save(stored_record)
+        return generated
 
     async def check_gns3_connectivity(self):
         try:

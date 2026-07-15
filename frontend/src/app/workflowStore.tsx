@@ -184,7 +184,22 @@ function parseStoredState(raw: string | null): WorkflowState | null {
     return null;
   }
   try {
-    return JSON.parse(raw) as WorkflowState;
+    const parsed = JSON.parse(raw) as Partial<WorkflowState>;
+    return {
+      ...initialState,
+      ...parsed,
+      topologyDraft: parsed.topologyDraft ?? initialState.topologyDraft,
+      history: parsed.history ?? initialState.history,
+      future: parsed.future ?? initialState.future,
+      addressRequest: parsed.addressRequest ?? initialState.addressRequest,
+      addressPlan: parsed.addressPlan ?? initialState.addressPlan,
+      activeDeployment: parsed.activeDeployment ?? initialState.activeDeployment,
+      deployments: parsed.deployments ?? initialState.deployments,
+      activeChange: parsed.activeChange ?? initialState.activeChange,
+      changes: parsed.changes ?? initialState.changes,
+      progressEvents: parsed.progressEvents ?? initialState.progressEvents,
+      selectedWorkflowId: parsed.selectedWorkflowId ?? initialState.selectedWorkflowId,
+    };
   } catch {
     return null;
   }

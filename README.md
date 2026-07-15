@@ -1049,6 +1049,109 @@ Note:
 - if `vite build` fails inside a restricted sandbox with an `EPERM` temp-file error, that is an environment limitation
 - the TypeScript check above is the safer verification command in that case
 
+## Sprint 16 Deliverables
+
+- provider-independent natural-language AI interface
+- strict structured output with Pydantic validation
+- topology interpretation preview
+- change-command interpretation preview
+- deterministic result explanation endpoint
+- prompt-injection detection and context sanitization
+- mocked valid, malformed, ambiguous, and unsafe AI tests
+
+## Sprint 16 Usage
+
+### Run AI Layer Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_ai_service.py -q
+```
+
+### Interpret a Natural-Language Topology Request
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/ai/topology `
+  -ContentType "application/json" `
+  -Body '{"prompt":"Üç VLAN''lı küçük ofis ağı kur. Guest ağı Admin ağına erişemesin."}'
+```
+
+### Interpret a Natural-Language Change Request
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/ai/change `
+  -ContentType "application/json" `
+  -Body '{"prompt":"STUDENT VLAN''ını trunk bağlantısından kaldır.","specification":{"project":{"name":"demo"},"devices":[],"links":[],"vlans":[],"subnets":[],"endpoints":[],"routes":[],"routing_protocols":[],"acls":[],"services":[],"connectivity_requirements":[],"validation_tests":[]}}'
+```
+
+### Explain Deterministic Results
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/ai/explain `
+  -ContentType "application/json" `
+  -Body '{"simulation":{"command_type":"REMOVE_VLAN_FROM_TRUNK"},"risk":{"total_score":55,"risk_level":"High"},"validations":[]}'
+```
+
+## Sprint 17 Deliverables
+
+- HTML and PDF report generation
+- backend coverage, linting, typing, and security toolchain config
+- frontend Vitest and Playwright scaffolding
+- optional real GNS3 test
+- GitHub Actions CI workflow
+- environment and security documentation
+- release-oriented README sections and demo prompts
+
+## Sprint 17 Usage
+
+### Run Full Backend Test Suite
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests -q
+```
+
+### Generate a Workflow Report
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/reports/generate `
+  -ContentType "application/json" `
+  -Body '{"deployment_id":"YOUR_DEPLOYMENT_ID","change_id":"YOUR_CHANGE_ID","user_requirements":["Guest VLAN impact review"]}'
+```
+
+### Frontend Typecheck
+
+```powershell
+cd frontend
+cmd /c .\node_modules\.bin\tsc.cmd --noEmit
+```
+
+### Planned Frontend Test Commands
+
+```powershell
+cd frontend
+cmd /c npm run test
+cmd /c npm run e2e
+```
+
+### Optional Real GNS3 Test
+
+```powershell
+cd backend
+$env:NETTWIN_RUN_REAL_GNS3="1"
+$env:GNS3_SERVER_URL="http://[::1]:3080"
+pytest tests/test_real_gns3_optional.py -q
+```
+
+## Release Docs
+
+- [Architecture](docs/architecture.md)
+- [Environment Guide](docs/environment.md)
+- [Security Model](docs/security-model.md)
+- [Demo Prompts](docs/demo-prompts.md)
+
 ## Current Status
 
 Current implementation includes:
@@ -1069,5 +1172,7 @@ Current implementation includes:
 - Sprint 13 deterministic root cause analysis
 - Sprint 14 FastAPI workflow API and WebSocket progress layer
 - Sprint 15 React visual network and change management UI
+- Sprint 16 natural-language AI interpretation layer
+- Sprint 17 reporting, release, CI, and test scaffolding
 
 Business logic for GNS3 deployment, configuration application, discovery, simulation, and impact analysis is still deferred to later sprints.
