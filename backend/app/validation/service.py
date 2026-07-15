@@ -164,6 +164,16 @@ class ValidationService:
                 failure_stage="trunk_propagation",
                 technical_explanation=f"VLAN {source.vlan_id} is not carried over the switch trunk.",
             )
+        if (
+            target.vlan_id is not None
+            and source.vlan_id != target.vlan_id
+            and target.vlan_id not in trunk_interface.trunk_vlans
+        ):
+            return ModelReachabilityResult(
+                reachable=False,
+                failure_stage="trunk_propagation",
+                technical_explanation=f"Destination VLAN {target.vlan_id} is not carried over the switch trunk.",
+            )
 
         gateway_device, gateway_interface_name = _find_gateway_interface(topology, source.default_gateway)
         if gateway_device is None or gateway_interface_name is None:

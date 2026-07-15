@@ -904,6 +904,151 @@ When the tests pass, the project now supports this chain:
 - identify direct and indirect impacts
 - convert those impacts into an explainable risk score and recommendation
 
+## Sprint 12 Deliverables
+
+- approved change workflow state machine
+- pre-change running-config backup
+- minimal change command generation
+- live apply and verification orchestration
+- inverse-command, backup-config, and optional project-reset rollback strategies
+- command output audit history
+
+## Sprint 12 Usage
+
+### Run Only Sprint 12 Deployment and Rollback Tests
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_change_deployment.py -q
+```
+
+What this validates:
+
+- a change is blocked until approval exists
+- pre-change backups are collected before apply
+- minimal CLI commands are generated and executed
+- post-change rediscovery runs after apply
+- predicted and actual behavior are compared
+- rollback executes when a critical mismatch is detected
+
+### Run Sprint 10 to Sprint 12 Together
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_simulation_service.py tests/test_risk_service.py tests/test_change_deployment.py -q
+```
+
+What this validates:
+
+- simulation produces the before/after expectation
+- risk scoring evaluates the proposed change
+- the approved deployment workflow can apply or rollback based on verification
+
+### Run the Full Change Workflow Test Chain
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+pytest tests/test_change_commands.py tests/test_validation_service.py tests/test_simulation_service.py tests/test_risk_service.py tests/test_change_deployment.py -q
+```
+
+What this validates:
+
+- typed change commands work
+- validation logic still predicts connectivity correctly
+- simulation and risk scoring are stable
+- approved apply and rollback flow is wired together correctly
+
+## Sprint 15 Deliverables
+
+- React and TypeScript workflow UI
+- typed frontend API client for Sprint 14 endpoints
+- visual topology builder and topology viewer
+- IP planning, configuration preview, deployment, validation, change, risk, approval, rollback, and audit screens
+- React Flow based topology canvas
+- WebSocket progress consumer for deployment and change workflows
+- local undo, redo, and autosave behavior for the draft topology
+
+## Sprint 15 Usage
+
+### Start the Backend API
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload
+```
+
+What this does:
+
+- starts the FastAPI backend on `http://127.0.0.1:8000`
+- exposes the Sprint 14 workflow endpoints used by the UI
+- enables `/health`, `/api/v1/...`, and workflow WebSocket progress streams
+
+### Start the Sprint 15 Frontend
+
+```powershell
+cd frontend
+cmd /c npm run dev
+```
+
+What this does:
+
+- starts the Vite development server, usually on `http://127.0.0.1:5173`
+- loads the multi-page Sprint 15 operator UI
+- connects the UI to the backend workflow API
+
+### Open the UI and Run the Main Workflow
+
+Recommended order inside the UI:
+
+1. `GNS3 Connection`
+2. `Project List`
+3. `Topology Builder`
+4. `IP Plan`
+5. `Configuration Preview`
+6. `Deployment Progress`
+7. `Live Topology`
+8. `Validation Results`
+9. `Change Builder`
+10. `Before / After`
+11. `Impact and Risk`
+12. `Approval`
+13. `Rollback`
+14. `Audit History`
+
+What this proves:
+
+- the frontend can drive the backend workflow from topology draft to change approval
+- the UI can call validation, simulation, and risk endpoints
+- deployment and change progress events can be consumed through WebSocket
+
+### Verify the Frontend TypeScript Build
+
+```powershell
+cd frontend
+cmd /c .\node_modules\.bin\tsc.cmd --noEmit
+```
+
+What this validates:
+
+- the Sprint 15 React and TypeScript code compiles cleanly
+- typed API payloads and page wiring are internally consistent
+
+### Optional Frontend Production Build Check
+
+```powershell
+cd frontend
+cmd /c npm run build
+```
+
+Note:
+
+- if `vite build` fails inside a restricted sandbox with an `EPERM` temp-file error, that is an environment limitation
+- the TypeScript check above is the safer verification command in that case
+
 ## Current Status
 
 Current implementation includes:
@@ -920,5 +1065,9 @@ Current implementation includes:
 - Sprint 9 typed network change commands
 - Sprint 10 immutable change simulation and impact analysis
 - Sprint 11 explainable risk scoring and recommendations
+- Sprint 12 approved change deployment and rollback workflow
+- Sprint 13 deterministic root cause analysis
+- Sprint 14 FastAPI workflow API and WebSocket progress layer
+- Sprint 15 React visual network and change management UI
 
 Business logic for GNS3 deployment, configuration application, discovery, simulation, and impact analysis is still deferred to later sprints.

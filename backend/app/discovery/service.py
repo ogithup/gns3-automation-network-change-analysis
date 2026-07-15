@@ -200,6 +200,33 @@ class DiscoveryService:
         self.state_store.save(discovered)
         return discovered
 
+    async def discover_project_state(
+        self,
+        *,
+        project_id: str,
+        project_name: str,
+        topology: TopologySpec,
+        console_infos: dict[str, GNS3ConsoleInfo],
+    ) -> DiscoveredNetworkState:
+        snapshots: list[DeviceStateSnapshot] = []
+        for device in topology.devices:
+            console_info = console_infos[device.id]
+            snapshots.append(
+                await self._configure_and_discover_device(
+                    device=device,
+                    console_info=console_info,
+                    rendered=None,
+                ),
+            )
+
+        discovered = DiscoveredNetworkState(
+            project_id=project_id,
+            project_name=project_name,
+            device_snapshots=snapshots,
+        )
+        self.state_store.save(discovered)
+        return discovered
+
     async def _configure_and_discover_device(
         self,
         *,

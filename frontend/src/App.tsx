@@ -1,53 +1,45 @@
-import { Link, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 
-import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { AppLayout } from "./components/AppLayout";
+import {
+  AddressingPage,
+  ApprovalPage,
+  AuditPage,
+  ChangeBuilderPage,
+  ComparisonPage,
+  ConfigurationPage,
+  ConnectionPage,
+  DeploymentPage,
+  LiveTopologyPage,
+  OverviewPage,
+  ProjectsPage,
+  RiskPage,
+  RollbackPage,
+  TopologyBuilderPage,
+  ValidationPage,
+} from "./pages/WorkflowPages";
 
 export default function App() {
   return (
-    <main className="app-shell">
-      <header className="hero">
-        <p className="eyebrow">NetTwin AI</p>
-        <h1>GNS3 Automation and Network Change Impact Analysis</h1>
-        <p className="lede">
-          Sprint 0 UI placeholder for the future operator workflow.
-        </p>
-        <nav className="nav">
-          <Link to="/">Overview</Link>
-          <Link to="/connection">GNS3 Connection</Link>
-          <Link to="/topology">Topology Builder</Link>
-        </nav>
-      </header>
-
-      <Routes>
-        <Route
-          path="/"
-          element={
-            <PlaceholderPage
-              title="Platform Overview"
-              description="This screen will evolve into the main workflow dashboard."
-            />
-          }
-        />
-        <Route
-          path="/connection"
-          element={
-            <PlaceholderPage
-              title="GNS3 Connection"
-              description="This screen will validate GNS3 REST and WebSocket connectivity."
-            />
-          }
-        />
-        <Route
-          path="/topology"
-          element={
-            <PlaceholderPage
-              title="Visual Topology Builder"
-              description="This screen will host React Flow based topology editing."
-            />
-          }
-        />
-      </Routes>
-    </main>
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route path="/" element={<OverviewPage />} />
+        <Route path="/connection" element={<ConnectionPage />} />
+        <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/topology" element={<TopologyBuilderPage />} />
+        <Route path="/addressing" element={<AddressingPage />} />
+        <Route path="/configuration" element={<ConfigurationPage />} />
+        <Route path="/deployment" element={<DeploymentPage />} />
+        <Route path="/live-topology" element={<LiveTopologyPage />} />
+        <Route path="/validation" element={<ValidationPage />} />
+        <Route path="/changes" element={<ChangeBuilderPage />} />
+        <Route path="/comparison" element={<ComparisonPage />} />
+        <Route path="/risk" element={<RiskPage />} />
+        <Route path="/approval" element={<ApprovalPage />} />
+        <Route path="/rollback" element={<RollbackPage />} />
+        <Route path="/audit" element={<AuditPage />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
-
