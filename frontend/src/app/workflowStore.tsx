@@ -78,6 +78,41 @@ type Action =
 
 const STORAGE_KEY = "nettwin-ai-sprint15";
 
+function withDerivedValidation(topology: TopologySpec): TopologySpec {
+  const manualRequirements = topology.connectivity_requirements.filter(
+    (requirement) => !requirement.id.startsWith("auto-"),
+  );
+  const manualTests = topology.validation_tests.filter(
+    (test) => !test.id.startsWith("auto-"),
+  );
+  const sortedEndpoints = [...topology.endpoints].sort((left, right) => left.id.localeCompare(right.id));
+  const autoRequirements = sortedEndpoints.flatMap((source, sourceIndex) => (
+    sortedEndpoints
+      .slice(sourceIndex + 1)
+      .map((target) => ({
+        id: `auto-${source.id}-to-${target.id}`,
+        source_endpoint_id: source.id,
+        target_endpoint_id: target.id,
+        protocol: "ping",
+        expected: "reachable",
+      }))
+  ));
+  const autoTests = autoRequirements.map((requirement) => ({
+    id: `auto-test-${requirement.source_endpoint_id}-to-${requirement.target_endpoint_id}`,
+    name: `${requirement.source_endpoint_id} to ${requirement.target_endpoint_id} ping`,
+    test_type: "ping",
+    source_endpoint_id: requirement.source_endpoint_id,
+    target_endpoint_id: requirement.target_endpoint_id,
+    expected_success: requirement.expected === "reachable",
+  }));
+
+  return {
+    ...topology,
+    connectivity_requirements: [...manualRequirements, ...autoRequirements],
+    validation_tests: [...manualTests, ...autoTests],
+  };
+}
+
 function normalizeTopology(topology: TopologySpec): TopologySpec {
   const endpointsByDeviceId = new Map(
     topology.endpoints.map((endpoint) => [endpoint.device_id, endpoint]),
@@ -97,11 +132,11 @@ function normalizeTopology(topology: TopologySpec): TopologySpec {
     }));
 
   if (synthesizedEndpoints.length === 0) {
-    return topology;
+    return withDerivedValidation(topology);
   }
 
   const endpointIds = new Set(topology.endpoints.map((endpoint) => endpoint.id));
-  return {
+  return withDerivedValidation({
     ...topology,
     endpoints: [...topology.endpoints, ...synthesizedEndpoints],
     vlans: topology.vlans.map((vlan, vlanIndex) => (
@@ -117,7 +152,7 @@ function normalizeTopology(topology: TopologySpec): TopologySpec {
         }
         : vlan
     )),
-  };
+  });
 }
 
 const initialState: WorkflowState = {
@@ -157,7 +192,7 @@ function reducer(state: WorkflowState, action: Action): WorkflowState {
         ...state,
         history: [...state.history, state.topologyDraft],
         future: [],
-        topologyDraft: action.topology,
+        topologyDraft: normalizeTopology(action.topology),
       };
     case "UNDO": {
       const previous = state.history[state.history.length - 1];

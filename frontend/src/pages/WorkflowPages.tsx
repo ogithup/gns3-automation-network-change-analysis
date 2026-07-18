@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { workflowClient, fetchHealth } from "../api/client";
@@ -62,7 +63,17 @@ function validationLabel(topology: TopologySpec, index: number) {
   if (!requirement) {
     return `Validation ${index + 1}`;
   }
-  return `${requirement.source_endpoint_id} -> ${requirement.target_endpoint_id}`;
+  const sourceEndpoint = topology.endpoints.find((endpoint) => endpoint.id === requirement.source_endpoint_id);
+  const targetEndpoint = topology.endpoints.find((endpoint) => endpoint.id === requirement.target_endpoint_id);
+  const sourceSegment = topology.vlans.find((vlan) => vlan.vlan_id === sourceEndpoint?.vlan_id)?.name;
+  const targetSegment = topology.vlans.find((vlan) => vlan.vlan_id === targetEndpoint?.vlan_id)?.name;
+  const sourceLabel = sourceEndpoint
+    ? `${sourceEndpoint.hostname}${sourceSegment ? ` [${sourceSegment}]` : ""}`
+    : requirement.source_endpoint_id;
+  const targetLabel = targetEndpoint
+    ? `${targetEndpoint.hostname}${targetSegment ? ` [${targetSegment}]` : ""}`
+    : requirement.target_endpoint_id;
+  return `${sourceLabel} -> ${targetLabel}`;
 }
 
 function formatTimestamp(value: string) {
@@ -432,58 +443,410 @@ function mutationErrorMessage(error: unknown) {
   return "Unexpected workflow error.";
 }
 
+function endpointFriendlyName(topology: TopologySpec, endpointId: string | undefined, fallback: string) {
+  const endpoint = topology.endpoints.find((item) => item.id === endpointId);
+  if (!endpoint) {
+    return fallback;
+  }
+  const segmentName = topology.vlans.find((vlan) => vlan.vlan_id === endpoint.vlan_id)?.name;
+  return segmentName ? `${endpoint.hostname} (${segmentName})` : endpoint.hostname;
+}
+
+type ValidationFixGuide = {
+  problemTypeTr: string;
+  problemTypeEn: string;
+  likelyFixTr: string;
+  likelyFixEn: string;
+  suggestedValuesTr: string[];
+  suggestedValuesEn: string[];
+  pageLabelTr: string;
+  pageLabelEn: string;
+  pagePath: string;
+  stepsTr: string[];
+  stepsEn: string[];
+};
+
+function buildValidationFixGuide(topology: TopologySpec, index: number, failureStage: string | null | undefined): ValidationFixGuide {
+  const requirement = topology.connectivity_requirements[index];
+  const sourceEndpointId = requirement?.source_endpoint_id ?? "source endpoint";
+  const targetEndpointId = requirement?.target_endpoint_id ?? "target endpoint";
+  const sourceEndpoint = topology.endpoints.find((endpoint) => endpoint.id === requirement?.source_endpoint_id);
+  const targetEndpoint = topology.endpoints.find((endpoint) => endpoint.id === requirement?.target_endpoint_id);
+  const sourceVlan = topology.vlans.find((vlan) => vlan.vlan_id === sourceEndpoint?.vlan_id);
+  const sourceSubnet = topology.subnets.find((subnet) => subnet.id === sourceEndpoint?.subnet_id || subnet.vlan_id === sourceEndpoint?.vlan_id);
+  const targetVlan = topology.vlans.find((vlan) => vlan.vlan_id === targetEndpoint?.vlan_id);
+  const targetSubnet = topology.subnets.find((subnet) => subnet.id === targetEndpoint?.subnet_id || subnet.vlan_id === targetEndpoint?.vlan_id);
+  const recommendedSourceSubnet = sourceVlan?.subnet ?? sourceSubnet?.network ?? "192.168.10.0/24";
+  const recommendedSourceGateway = sourceVlan?.gateway ?? sourceSubnet?.gateway ?? "192.168.10.1";
+  const recommendedSourceIp = sourceEndpoint?.ip_address ?? addIpv4Offset(networkBaseIp(recommendedSourceSubnet), 10);
+  const recommendedTargetSubnet = targetVlan?.subnet ?? targetSubnet?.network ?? "192.168.20.0/24";
+  const recommendedTargetGateway = targetVlan?.gateway ?? targetSubnet?.gateway ?? "192.168.20.1";
+  const recommendedTargetIp = targetEndpoint?.ip_address ?? addIpv4Offset(networkBaseIp(recommendedTargetSubnet), 10);
+  const sourceFriendlyName = endpointFriendlyName(topology, requirement?.source_endpoint_id, sourceEndpointId);
+  const targetFriendlyName = endpointFriendlyName(topology, requirement?.target_endpoint_id, targetEndpointId);
+  const sourceSegmentName = sourceVlan?.name ?? "Segment not assigned";
+  const targetSegmentName = targetVlan?.name ?? "Segment not assigned";
+
+  switch (failureStage) {
+    case "source_addressing":
+      return {
+        problemTypeTr: "Kaynak adresleme eksik veya hatali",
+        problemTypeEn: "Source addressing is missing or invalid",
+        likelyFixTr: `${sourceFriendlyName} icin segment, subnet, IP ve gateway alanlarini topology mantigina gore doldur.`,
+        likelyFixEn: `Fill the segment, subnet, IP, and gateway fields for ${sourceFriendlyName} so they match the topology design.`,
+        suggestedValuesTr: [
+          `Endpoint cihazi: ${sourceFriendlyName}`,
+          `Segment/VLAN: ${sourceSegmentName}`,
+          `Subnet alani: ${recommendedSourceSubnet}`,
+          `Gateway alani: ${recommendedSourceGateway}`,
+          `${sourceEndpoint?.hostname ?? sourceEndpointId} IP alani: ${recommendedSourceIp}`,
+          `${sourceEndpoint?.hostname ?? sourceEndpointId} Gateway alani: ${recommendedSourceGateway}`,
+        ],
+        suggestedValuesEn: [
+          `Endpoint device: ${sourceFriendlyName}`,
+          `Segment/VLAN: ${sourceSegmentName}`,
+          `Subnet field: ${recommendedSourceSubnet}`,
+          `Gateway field: ${recommendedSourceGateway}`,
+          `${sourceEndpoint?.hostname ?? sourceEndpointId} IP field: ${recommendedSourceIp}`,
+          `${sourceEndpoint?.hostname ?? sourceEndpointId} gateway field: ${recommendedSourceGateway}`,
+        ],
+        pageLabelTr: "IP Address Plan",
+        pageLabelEn: "IP Address Plan",
+        pagePath: "/addressing",
+        stepsTr: [
+          `1. /addressing sayfasina git ve ${sourceFriendlyName} satirini veya bagli ${sourceSegmentName} segmentini bul.`,
+          `2. Segment name alaninda ${sourceSegmentName} yazdigini kontrol et.`,
+          `3. Subnet alanina ${recommendedSourceSubnet}, Gateway alanina ${recommendedSourceGateway} yaz.`,
+          `4. ${sourceEndpoint?.hostname ?? sourceEndpointId} icin IP alanina ${recommendedSourceIp}, Gateway alanina ${recommendedSourceGateway} yaz.`,
+          "5. Apply Manual IP Plan ile degerleri kaydet.",
+          "6. Ardindan /deployment sayfasina donup sirasiyla Configure, Discover ve Run Validation calistir.",
+        ],
+        stepsEn: [
+          `1. Open /addressing and find ${sourceFriendlyName} or the related ${sourceSegmentName} segment.`,
+          `2. Confirm that the Segment name field shows ${sourceSegmentName}.`,
+          `3. Enter ${recommendedSourceSubnet} in Subnet and ${recommendedSourceGateway} in Gateway.`,
+          `4. For ${sourceEndpoint?.hostname ?? sourceEndpointId}, enter ${recommendedSourceIp} as the endpoint IP and ${recommendedSourceGateway} as the endpoint gateway.`,
+          "5. Save the values with Apply Manual IP Plan.",
+          "6. Then go back to /deployment and run Configure, Discover, and Run Validation in order.",
+        ],
+      };
+    case "access_vlan":
+      return {
+        problemTypeTr: "Access VLAN eslesmesi bozuk",
+        problemTypeEn: "Access VLAN mapping is incorrect",
+        likelyFixTr: `${sourceFriendlyName} ve ${targetFriendlyName} icin port-segment eslesmesini ayni topology tasarimina gore hizala.`,
+        likelyFixEn: `Align the port-to-segment mapping for ${sourceFriendlyName} and ${targetFriendlyName} with the topology design.`,
+        suggestedValuesTr: [
+          `${sourceFriendlyName} icin beklenen segment: ${sourceSegmentName}`,
+          `${sourceFriendlyName} icin beklenen subnet/gateway: ${recommendedSourceSubnet} / ${recommendedSourceGateway}`,
+          `${targetFriendlyName} icin beklenen segment: ${targetSegmentName}`,
+          `${targetFriendlyName} icin beklenen subnet/gateway: ${recommendedTargetSubnet} / ${recommendedTargetGateway}`,
+          "Switch access portu endpoint'in bagli oldugu segment ile ayni mantikta olmalidir.",
+        ],
+        suggestedValuesEn: [
+          `Expected segment for ${sourceFriendlyName}: ${sourceSegmentName}`,
+          `Expected subnet/gateway for ${sourceFriendlyName}: ${recommendedSourceSubnet} / ${recommendedSourceGateway}`,
+          `Expected segment for ${targetFriendlyName}: ${targetSegmentName}`,
+          `Expected subnet/gateway for ${targetFriendlyName}: ${recommendedTargetSubnet} / ${recommendedTargetGateway}`,
+          "The switch access port should match the segment used by the endpoint.",
+        ],
+        pageLabelTr: "Topology Builder",
+        pageLabelEn: "Topology Builder",
+        pagePath: "/topology",
+        stepsTr: [
+          `1. /topology sayfasina git ve ${sourceEndpoint?.hostname ?? sourceEndpointId} ile ${targetEndpoint?.hostname ?? targetEndpointId} baglantilarini incele.`,
+          `2. ${sourceEndpoint?.hostname ?? sourceEndpointId} cihazinin ${sourceSegmentName}, ${targetEndpoint?.hostname ?? targetEndpointId} cihazinin ${targetSegmentName} segmentinde durdugundan emin ol.`,
+          "3. Endpoint'in bagli oldugu switch portu access mantiginda olmali ve yanlis segmente dusmemeli.",
+          "4. Ardindan /addressing sayfasinda subnet/gateway degerlerinin ayni segment isimleriyle uyumlu kaldigini kontrol et.",
+          "5. Kaydet, sonra /deployment sayfasinda yeniden Configure, Discover ve Run Validation calistir.",
+        ],
+        stepsEn: [
+          `1. Open /topology and inspect the links for ${sourceEndpoint?.hostname ?? sourceEndpointId} and ${targetEndpoint?.hostname ?? targetEndpointId}.`,
+          `2. Make sure ${sourceEndpoint?.hostname ?? sourceEndpointId} belongs to ${sourceSegmentName} and ${targetEndpoint?.hostname ?? targetEndpointId} belongs to ${targetSegmentName}.`,
+          "3. The switch port connected to the endpoint should behave like an access port and should not point to the wrong segment.",
+          "4. Then confirm on /addressing that subnet and gateway values still match those segment names.",
+          "5. Save the topology and rerun Configure, Discover, and Run Validation from /deployment.",
+        ],
+      };
+    case "trunk_propagation":
+      return {
+        problemTypeTr: "Trunk uzerinden VLAN tasinmiyor",
+        problemTypeEn: "The VLAN is not carried across the trunk",
+        likelyFixTr: `Switch-router uplink uzerinden ${sourceSegmentName} ve gerekiyorsa ${targetSegmentName} segmentlerini tasiyacak sekilde trunk mantigini duzelt.`,
+        likelyFixEn: `Adjust the switch-to-router uplink so the trunk carries ${sourceSegmentName} and, if needed, ${targetSegmentName}.`,
+        suggestedValuesTr: [
+          `Trunk allowed VLAN listesine eklenmeli: ${sourceEndpoint?.vlan_id ?? targetEndpoint?.vlan_id ?? "ilgili VLAN"}`,
+          `Kaynak subnet: ${recommendedSourceSubnet}`,
+          `Hedef subnet: ${recommendedTargetSubnet}`,
+        ],
+        suggestedValuesEn: [
+          `Add this VLAN to the trunk allowed list: ${sourceEndpoint?.vlan_id ?? targetEndpoint?.vlan_id ?? "the relevant VLAN"}`,
+          `Source subnet: ${recommendedSourceSubnet}`,
+          `Target subnet: ${recommendedTargetSubnet}`,
+        ],
+        pageLabelTr: "Topology Builder",
+        pageLabelEn: "Topology Builder",
+        pagePath: "/topology",
+        stepsTr: [
+          "1. /topology sayfasinda switch-router uplink baglantisini bul.",
+          "2. Bu baglantinin trunk olarak dusunuldugu VLAN akisini kontrol et.",
+          "3. Problemli endpoint'in ait oldugu VLAN'in uplink uzerinden tasinmasi gerektigini dogrula.",
+          "4. Kaydet, sonra /configuration ve /deployment akisini tekrar calistir.",
+          "5. Discover ve Run Validation ile trunk etkisini yeniden test et.",
+        ],
+        stepsEn: [
+          "1. Open /topology and locate the switch-to-router uplink.",
+          "2. Check the intended VLAN flow for that trunk-style link.",
+          "3. Verify that the failing endpoint VLAN should be carried over the uplink.",
+          "4. Save the draft, then rerun /configuration and /deployment steps.",
+          "5. Re-run Discover and Run Validation to test the trunk path again.",
+        ],
+      };
+    case "gateway_availability":
+      return {
+        problemTypeTr: "Gateway aktif degil veya bulunamadi",
+        problemTypeEn: "Gateway is unavailable or missing",
+        likelyFixTr: `${sourceFriendlyName} icin gateway degeri router tarafindaki ayni segment gateway'i ile eslesmeli.`,
+        likelyFixEn: `The gateway value for ${sourceFriendlyName} should match the router gateway for the same segment.`,
+        suggestedValuesTr: [
+          `Gateway alani icin onerilen deger: ${recommendedSourceGateway}`,
+          `Bagli subnet icin onerilen deger: ${recommendedSourceSubnet}`,
+          `Endpoint IP ornegi: ${recommendedSourceIp}`,
+        ],
+        suggestedValuesEn: [
+          `Recommended gateway value: ${recommendedSourceGateway}`,
+          `Recommended subnet value: ${recommendedSourceSubnet}`,
+          `Example endpoint IP: ${recommendedSourceIp}`,
+        ],
+        pageLabelTr: "IP Address Plan",
+        pageLabelEn: "IP Address Plan",
+        pagePath: "/addressing",
+        stepsTr: [
+          "1. /addressing sayfasinda ilgili segment gateway degerini kontrol et.",
+          "2. Router alt arayuzu ile bu gateway adresinin eslesmesi gerektigini dogrula.",
+          "3. Gerekirse subnet ve gateway alanlarini birlikte duzelt.",
+          "4. Sonra /configuration sayfasinda configleri yeniden uret.",
+          "5. /deployment sayfasinda Configure, Discover ve Run Validation adimlarini tekrar calistir.",
+        ],
+        stepsEn: [
+          "1. Check the gateway value for the segment on /addressing.",
+          "2. Verify that the router subinterface should match that gateway address.",
+          "3. Update the subnet and gateway together if needed.",
+          "4. Regenerate configs from /configuration.",
+          "5. Then rerun Configure, Discover, and Run Validation on /deployment.",
+        ],
+      };
+    case "route_selection":
+      return {
+        problemTypeTr: "Hedef ag icin route bulunamadi",
+        problemTypeEn: "No route was found for the destination network",
+        likelyFixTr: `${sourceFriendlyName} ile ${targetFriendlyName} arasinda hedef segmente giden yol eksik gorunuyor.`,
+        likelyFixEn: `The path from ${sourceFriendlyName} to the target segment of ${targetFriendlyName} appears to be missing.`,
+        suggestedValuesTr: [
+          `Kaynak subnet: ${recommendedSourceSubnet}`,
+          `Hedef subnet: ${recommendedTargetSubnet}`,
+          `Hedef gateway: ${recommendedTargetGateway}`,
+        ],
+        suggestedValuesEn: [
+          `Source subnet: ${recommendedSourceSubnet}`,
+          `Target subnet: ${recommendedTargetSubnet}`,
+          `Target gateway: ${recommendedTargetGateway}`,
+        ],
+        pageLabelTr: "Topology Builder",
+        pageLabelEn: "Topology Builder",
+        pagePath: "/topology",
+        stepsTr: [
+          "1. /topology sayfasinda hedef endpoint'in hangi subnet/VLAN icinde oldugunu kontrol et.",
+          "2. Router'in bu agi dogrudan bagli mi yoksa route ile mi ogrenmesi gerektigini belirle.",
+          "3. Gerekirse topology ve addressing bilgilerini route mantigina uygun duzelt.",
+          "4. Ardindan /configuration sayfasinda yeni configleri uret.",
+          "5. /deployment sayfasinda Configure, Discover ve Run Validation adimlarini tekrarla.",
+        ],
+        stepsEn: [
+          "1. On /topology, check which subnet/VLAN the destination endpoint belongs to.",
+          "2. Decide whether the router should know that network as connected or through a route.",
+          "3. Adjust the topology and addressing to match the intended route logic.",
+          "4. Regenerate the configs on /configuration.",
+          "5. Rerun Configure, Discover, and Run Validation on /deployment.",
+        ],
+      };
+    case "acl_evaluation":
+      return {
+        problemTypeTr: "ACL trafigi engelliyor",
+        problemTypeEn: "An ACL is blocking the traffic",
+        likelyFixTr: `${sourceFriendlyName} ile ${targetFriendlyName} arasindaki trafik ACL tarafinda beklenmedik sekilde engelleniyor olabilir.`,
+        likelyFixEn: `Traffic between ${sourceFriendlyName} and ${targetFriendlyName} may be blocked unexpectedly by an ACL.`,
+        suggestedValuesTr: [
+          `Kaynak IP/Subnet: ${recommendedSourceIp} / ${recommendedSourceSubnet}`,
+          `Hedef IP/Subnet: ${recommendedTargetIp} / ${recommendedTargetSubnet}`,
+          "Bu trafik permit edilmeli mi yoksa block senaryosu mu bekleniyor, bunu kontrol et.",
+        ],
+        suggestedValuesEn: [
+          `Source IP/Subnet: ${recommendedSourceIp} / ${recommendedSourceSubnet}`,
+          `Target IP/Subnet: ${recommendedTargetIp} / ${recommendedTargetSubnet}`,
+          "Confirm whether this traffic should be permitted or intentionally blocked.",
+        ],
+        pageLabelTr: "Change Builder",
+        pageLabelEn: "Change Builder",
+        pagePath: "/changes",
+        stepsTr: [
+          "1. /changes sayfasina git ve ACL ile ilgili degisikligi incele veya yeni degisiklik taslagi olustur.",
+          "2. Kaynak subnet ile hedef subnet arasinda deny kuralinin olup olmadigini kontrol et.",
+          "3. Gerekirse permit/deny sirasini ve kapsamını duzelt.",
+          "4. Simulasyon sonrasi onizlemeyi tekrar degerlendir.",
+          "5. Son olarak /deployment veya change workflow uzerinden yeniden dogrulama yap.",
+        ],
+        stepsEn: [
+          "1. Open /changes and inspect the ACL-related change or create a new ACL adjustment draft.",
+          "2. Check whether a deny rule exists between the source and target subnets.",
+          "3. Update the permit/deny order and scope if needed.",
+          "4. Re-evaluate the simulation and preview.",
+          "5. Then run validation again through the deployment or change workflow.",
+        ],
+      };
+    case "destination_availability":
+      return {
+        problemTypeTr: "Hedef endpoint topolojide hazir degil",
+        problemTypeEn: "The destination endpoint is not ready in the topology",
+        likelyFixTr: `${targetFriendlyName} icin segment, baglanti veya endpoint adresleme bilgileri eksik olabilir.`,
+        likelyFixEn: `${targetFriendlyName} may be missing segment, link, or endpoint addressing details.`,
+        suggestedValuesTr: [
+          `${targetEndpointId} icin subnet: ${recommendedTargetSubnet}`,
+          `${targetEndpointId} icin gateway: ${recommendedTargetGateway}`,
+          `${targetEndpointId} icin IP ornegi: ${recommendedTargetIp}`,
+        ],
+        suggestedValuesEn: [
+          `Subnet for ${targetEndpointId}: ${recommendedTargetSubnet}`,
+          `Gateway for ${targetEndpointId}: ${recommendedTargetGateway}`,
+          `Example IP for ${targetEndpointId}: ${recommendedTargetIp}`,
+        ],
+        pageLabelTr: "Topology Builder",
+        pageLabelEn: "Topology Builder",
+        pagePath: "/topology",
+        stepsTr: [
+          "1. /topology sayfasinda hedef endpoint'in gerçekten switch'e bagli oldugunu kontrol et.",
+          "2. Cihazin hostname, link ve interface secimlerinin bos olmadigindan emin ol.",
+          "3. Sonra /addressing sayfasinda hedef endpoint icin IP ve gateway bilgilerini kontrol et.",
+          "4. Kaydet ve /deployment sayfasinda Discover ile guncel durumu tekrar olustur.",
+          "5. Son adimda Run Validation ile sonucu tekrar test et.",
+        ],
+        stepsEn: [
+          "1. On /topology, confirm that the destination endpoint is actually linked to the switch.",
+          "2. Make sure the hostname, link, and interface selections are all present.",
+          "3. Then check the destination IP and gateway values on /addressing.",
+          "4. Save the draft and rerun Discover on /deployment.",
+          "5. Finish by running Run Validation again.",
+        ],
+      };
+    default:
+      return {
+        problemTypeTr: "Genel dogrulama hatasi",
+        problemTypeEn: "General validation failure",
+        likelyFixTr: "Topology, addressing ve deployment adimlarini birlikte tekrar gozden gecir.",
+        likelyFixEn: "Review the topology, addressing, and deployment steps together.",
+        suggestedValuesTr: [
+          `Kaynak subnet/gateway: ${recommendedSourceSubnet} / ${recommendedSourceGateway}`,
+          `Hedef subnet/gateway: ${recommendedTargetSubnet} / ${recommendedTargetGateway}`,
+        ],
+        suggestedValuesEn: [
+          `Source subnet/gateway: ${recommendedSourceSubnet} / ${recommendedSourceGateway}`,
+          `Target subnet/gateway: ${recommendedTargetSubnet} / ${recommendedTargetGateway}`,
+        ],
+        pageLabelTr: "Deployment Progress",
+        pageLabelEn: "Deployment Progress",
+        pagePath: "/deployment",
+        stepsTr: [
+          "1. /deployment sayfasina git ve Configure, Discover, Run Validation sirasini koru.",
+          "2. /topology ve /addressing sayfalarindaki eksik alanlari kontrol et.",
+          "3. Configuration Preview'de olusan komutlarin mantikli oldugunu incele.",
+          "4. Live Topology ekraninda cihaz ve link durumlarini karsilastir.",
+          "5. Sonra validation sonucunu yeniden uret.",
+        ],
+        stepsEn: [
+          "1. Go to /deployment and keep the Configure, Discover, Run Validation order.",
+          "2. Review missing values on /topology and /addressing.",
+          "3. Inspect whether the generated commands in Configuration Preview look reasonable.",
+          "4. Compare device and link state on Live Topology.",
+          "5. Then run validation again.",
+        ],
+      };
+  }
+}
+
 function applyAddressPlanToTopology(topology: TopologySpec, plan: AddressingPlan) {
-  const allocationsByName = new Map(plan.allocations.map((allocation) => [allocation.name.toUpperCase(), allocation]));
-  const nextVlans = topology.vlans.map((vlan) => {
-    const allocation = allocationsByName.get(vlan.name.toUpperCase());
-    if (!allocation) {
-      return vlan;
-    }
+  const nextVlans = plan.allocations.map((allocation, index) => {
+    const existingVlan = topology.vlans[index]
+      ?? topology.vlans.find((vlan) => vlan.name.toUpperCase() === allocation.name.toUpperCase());
+    const vlanId = existingVlan?.vlan_id ?? ((index + 1) * 10);
     return {
-      ...vlan,
+      vlan_id: vlanId,
+      name: allocation.name,
       subnet: allocation.network,
       gateway: allocation.gateway,
+      endpoint_ids: existingVlan?.endpoint_ids ?? [],
     };
   });
 
-  const nextSubnets = topology.subnets.map((subnet) => {
-    const linkedVlan = nextVlans.find((vlan) => vlan.vlan_id === subnet.vlan_id);
-    if (!linkedVlan) {
-      return subnet;
-    }
+  const nextSubnets = nextVlans.map((vlan) => {
+    const existingSubnet = topology.subnets.find((subnet) => subnet.vlan_id === vlan.vlan_id);
     return {
-      ...subnet,
-      network: linkedVlan.subnet ?? subnet.network,
-      gateway: linkedVlan.gateway ?? subnet.gateway,
+      id: existingSubnet?.id ?? `vlan${vlan.vlan_id}-subnet`,
+      name: existingSubnet?.name ?? `${vlan.name} subnet`,
+      network: vlan.subnet ?? existingSubnet?.network ?? `192.168.${vlan.vlan_id}.0/24`,
+      gateway: vlan.gateway ?? existingSubnet?.gateway ?? `192.168.${vlan.vlan_id}.1`,
+      vlan_id: vlan.vlan_id,
     };
   });
 
+  const endpointCountByVlan = new Map<number, number>();
   const nextEndpoints = topology.endpoints.map((endpoint, index) => {
-    const vlan = nextVlans.find((item) => item.vlan_id === endpoint.vlan_id);
+    const existingAssignedVlan = nextVlans.find((item) => item.vlan_id === endpoint.vlan_id);
+    const fallbackVlan = nextVlans[Math.min(index, Math.max(nextVlans.length - 1, 0))];
+    const vlan = existingAssignedVlan ?? fallbackVlan;
     if (!vlan?.subnet) {
       return endpoint;
     }
+    const subnet = nextSubnets.find((item) => item.vlan_id === vlan.vlan_id);
+    const currentCount = endpointCountByVlan.get(vlan.vlan_id) ?? 0;
+    endpointCountByVlan.set(vlan.vlan_id, currentCount + 1);
+    const hostOffset = 10 + currentCount;
     const baseIp = networkBaseIp(vlan.subnet);
     return {
       ...endpoint,
-      ip_address: addIpv4Offset(baseIp, 10 + index),
+      vlan_id: vlan.vlan_id,
+      subnet_id: subnet?.id ?? endpoint.subnet_id,
+      ip_address: addIpv4Offset(baseIp, hostOffset),
       default_gateway: vlan.gateway ?? endpoint.default_gateway,
     };
   });
 
+  const endpointIdsByVlan = new Map<number, string[]>();
+  nextEndpoints.forEach((endpoint) => {
+    if (typeof endpoint.vlan_id !== "number") {
+      return;
+    }
+    const existingIds = endpointIdsByVlan.get(endpoint.vlan_id) ?? [];
+    endpointIdsByVlan.set(endpoint.vlan_id, [...existingIds, endpoint.id]);
+  });
+
+  const finalizedVlans = nextVlans.map((vlan) => ({
+    ...vlan,
+    endpoint_ids: endpointIdsByVlan.get(vlan.vlan_id) ?? [],
+  }));
+
   const nextDevices = topology.devices.map((device) => {
-    if (device.type === "router") {
-      return {
-        ...device,
-        interfaces: device.interfaces.map((iface) => {
-          const suffix = iface.name.split(".")[1];
-          const vlanId = suffix ? Number(suffix) : null;
-          const linkedVlan = vlanId ? nextVlans.find((item) => item.vlan_id === vlanId) : null;
-          if (!linkedVlan?.gateway) {
-            return iface;
-          }
-          return {
-            ...iface,
+      if (device.type === "router") {
+        return {
+          ...device,
+          interfaces: device.interfaces.map((iface) => {
+            const suffix = iface.name.split(".")[1];
+            const vlanId = suffix ? Number(suffix) : null;
+            const linkedVlan = vlanId ? finalizedVlans.find((item) => item.vlan_id === vlanId) : null;
+            if (!linkedVlan?.gateway) {
+              return iface;
+            }
+            return {
+              ...iface,
             ipv4_address: `${linkedVlan.gateway}/${linkedVlan.subnet?.split("/")[1] ?? "24"}`,
           };
         }),
@@ -505,10 +868,45 @@ function applyAddressPlanToTopology(topology: TopologySpec, plan: AddressingPlan
 
   return {
     ...topology,
-    vlans: nextVlans,
+    vlans: finalizedVlans,
     subnets: nextSubnets,
     endpoints: nextEndpoints,
     devices: nextDevices,
+  };
+}
+
+function ensureSegmentTopologyEntry(topology: TopologySpec, segmentName: string, index: number) {
+  const existingVlan = topology.vlans[index];
+  if (existingVlan) {
+    const existingSubnet = topology.subnets.find((subnet) => subnet.vlan_id === existingVlan.vlan_id);
+    return {
+      vlan: existingVlan,
+      subnet: existingSubnet ?? {
+        id: `vlan${existingVlan.vlan_id}-subnet`,
+        name: `${existingVlan.name} subnet`,
+        network: existingVlan.subnet ?? `192.168.${existingVlan.vlan_id}.0/24`,
+        gateway: existingVlan.gateway ?? `192.168.${existingVlan.vlan_id}.1`,
+        vlan_id: existingVlan.vlan_id,
+      },
+    };
+  }
+
+  const vlanId = (index + 1) * 10;
+  return {
+    vlan: {
+      vlan_id: vlanId,
+      name: segmentName || `VLAN${vlanId}`,
+      subnet: `192.168.${vlanId}.0/24`,
+      gateway: `192.168.${vlanId}.1`,
+      endpoint_ids: [],
+    },
+    subnet: {
+      id: `vlan${vlanId}-subnet`,
+      name: `${segmentName || `VLAN${vlanId}`} subnet`,
+      network: `192.168.${vlanId}.0/24`,
+      gateway: `192.168.${vlanId}.1`,
+      vlan_id: vlanId,
+    },
   };
 }
 
@@ -990,10 +1388,61 @@ export function ValidationPage() {
           <div className="list-grid">
             {activeDeployment.validations.map((validation, index) => (
               <article key={`${validation.state}-${index}`} className="list-card list-card--static">
-                <strong>{validationLabel(activeDeployment.topology ?? defaultTopologyFallback(), index)}</strong>
-                <StatusPill value={validation.predicted_reachable ? "Reachable" : "Blocked"} tone={validation.predicted_reachable ? "success" : "danger"} />
-                <span>{validation.failure_stage ?? validation.state ?? "validated"}</span>
-                <small>{validation.technical_explanation ?? validation.suspected_reason ?? "No explanation."}</small>
+                {(() => {
+                  const topology = activeDeployment.topology ?? defaultTopologyFallback();
+                  const fixGuide = buildValidationFixGuide(topology, index, validation.failure_stage);
+                  return (
+                    <>
+                      <strong>{validationLabel(topology, index)}</strong>
+                      <StatusPill value={validation.predicted_reachable ? "Reachable" : "Blocked"} tone={validation.predicted_reachable ? "success" : "danger"} />
+                      <span>{validation.failure_stage ?? validation.state ?? "validated"}</span>
+                      <small>{validation.technical_explanation ?? validation.suspected_reason ?? "No explanation."}</small>
+
+                      {!validation.predicted_reachable ? (
+                        <div className="stack">
+                          <article className="list-card list-card--static">
+                            <strong>Problem type</strong>
+                            <span>{fixGuide.problemTypeTr}</span>
+                            <small>{fixGuide.problemTypeEn}</small>
+                          </article>
+                          <article className="list-card list-card--static">
+                            <strong>Likely fix</strong>
+                            <span>{fixGuide.likelyFixTr}</span>
+                            <small>{fixGuide.likelyFixEn}</small>
+                          </article>
+                          <div className="comparison-grid">
+                            <article className="list-card list-card--static">
+                              <strong>Onerilen doldurma degerleri</strong>
+                              {fixGuide.suggestedValuesTr.map((item) => <span key={item}>{item}</span>)}
+                            </article>
+                            <article className="list-card list-card--static">
+                              <strong>Suggested field values</strong>
+                              {fixGuide.suggestedValuesEn.map((item) => <span key={item}>{item}</span>)}
+                            </article>
+                          </div>
+                          <article className="list-card list-card--static">
+                            <strong>Go to</strong>
+                            <span>
+                              <Link to={fixGuide.pagePath}>{fixGuide.pageLabelTr}</Link>
+                              {" / "}
+                              <Link to={fixGuide.pagePath}>{fixGuide.pageLabelEn}</Link>
+                            </span>
+                          </article>
+                          <div className="comparison-grid">
+                            <article className="list-card list-card--static">
+                              <strong>Turkce fix adimlari</strong>
+                              {fixGuide.stepsTr.map((step) => <span key={step}>{step}</span>)}
+                            </article>
+                            <article className="list-card list-card--static">
+                              <strong>English fix steps</strong>
+                              {fixGuide.stepsEn.map((step) => <span key={step}>{step}</span>)}
+                            </article>
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </article>
             ))}
           </div>
@@ -1805,30 +2254,55 @@ export function AddressingPageV2() {
   };
 
   const updateTopologyFromSegment = (index: number, field: "name" | "subnet" | "gateway", value: string) => {
-    const vlan = store.topologyDraft.vlans[index];
-    if (!vlan) {
-      return;
-    }
-    store.setTopologyDraft({
-      ...store.topologyDraft,
-      vlans: store.topologyDraft.vlans.map((item, itemIndex) => itemIndex === index ? {
-        ...item,
+    const entry = ensureSegmentTopologyEntry(store.topologyDraft, request.segments[index]?.name ?? `SEGMENT-${index + 1}`, index);
+    const vlan = entry.vlan;
+    const subnet = entry.subnet;
+    const nextVlans = store.topologyDraft.vlans.slice();
+    nextVlans[index] = nextVlans[index]
+      ? {
+        ...nextVlans[index],
         ...(field === "name" ? { name: value } : {}),
         ...(field === "subnet" ? { subnet: value } : {}),
         ...(field === "gateway" ? { gateway: value } : {}),
-      } : item),
-      subnets: store.topologyDraft.subnets.map((subnet) => subnet.vlan_id === vlan.vlan_id ? {
-        ...subnet,
+      }
+      : {
+        ...vlan,
+        ...(field === "name" ? { name: value } : {}),
+        ...(field === "subnet" ? { subnet: value } : {}),
+        ...(field === "gateway" ? { gateway: value } : {}),
+      };
+    const subnetExists = store.topologyDraft.subnets.some((item) => item.vlan_id === vlan.vlan_id);
+    const nextSubnets = subnetExists
+      ? store.topologyDraft.subnets.map((item) => item.vlan_id === vlan.vlan_id ? {
+        ...item,
         ...(field === "name" ? { name: `${value} subnet` } : {}),
         ...(field === "subnet" ? { network: value } : {}),
         ...(field === "gateway" ? { gateway: value } : {}),
-      } : subnet),
+      } : item)
+      : [
+        ...store.topologyDraft.subnets,
+        {
+          ...subnet,
+          ...(field === "name" ? { name: `${value} subnet` } : {}),
+          ...(field === "subnet" ? { network: value } : {}),
+          ...(field === "gateway" ? { gateway: value } : {}),
+        },
+      ];
+    store.setTopologyDraft({
+      ...store.topologyDraft,
+      vlans: nextVlans,
+      subnets: nextSubnets,
       devices: store.topologyDraft.devices.map((device) => device.type === "router" ? {
         ...device,
         interfaces: device.interfaces.map((iface) => iface.name.endsWith(`.${vlan.vlan_id}`) && field === "gateway"
-          ? { ...iface, ipv4_address: `${value}/${(store.topologyDraft.vlans[index]?.subnet ?? "192.168.1.0/24").split("/")[1] ?? "24"}` }
+          ? { ...iface, ipv4_address: `${value}/${(nextVlans[index]?.subnet ?? "192.168.1.0/24").split("/")[1] ?? "24"}` }
           : iface),
       } : device),
+      endpoints: store.topologyDraft.endpoints.map((endpoint) => endpoint.vlan_id === vlan.vlan_id ? {
+        ...endpoint,
+        subnet_id: nextSubnets.find((item) => item.vlan_id === vlan.vlan_id)?.id ?? endpoint.subnet_id,
+        ...(field === "gateway" ? { default_gateway: value } : {}),
+      } : endpoint),
     });
   };
 
