@@ -129,6 +129,13 @@ export type TopologySpec = {
   dhcp_pools?: Array<Record<string, unknown>>;
 };
 
+export type SavedTopologyRecord = {
+  id: string;
+  name: string;
+  topology: TopologySpec;
+  updated_at: string;
+};
+
 export type Gns3Version = {
   version: string;
   local: boolean;

@@ -8,6 +8,7 @@ from uuid import uuid4
 from app.addressing.models import AddressingRequest
 from app.addressing.service import AddressingService
 from app.ai.service import AIService
+from app.api.errors import APIError
 from app.api.progress import ProgressEventHub
 from app.api.repositories import (
     ChangeRecord,
@@ -32,6 +33,7 @@ from app.changes.models import (
     ShutdownInterfaceCommand,
 )
 from app.configuration.generator import ConfigurationRenderer
+from app.configuration.exceptions import ConfigurationError
 from app.discovery.models import (
     DeviceStateSnapshot,
     DiscoveredACL,
@@ -162,7 +164,14 @@ class WorkflowService:
     async def configure_deployment(self, deployment_id: str) -> DeploymentRecord:
         record = self.deployment_repository.get(deployment_id)
         await self.progress_hub.publish(deployment_id, {"status": "Applying configurations"})
-        record.configuration_preview = self.configuration_renderer.render_topology(record.topology)
+        try:
+            record.configuration_preview = self.configuration_renderer.render_topology(record.topology)
+        except ConfigurationError as error:
+            raise APIError(
+                status_code=400,
+                error="configuration_error",
+                detail=str(error),
+            ) from error
         record.status = "Configured"
         self.deployment_repository.save(record)
         return record

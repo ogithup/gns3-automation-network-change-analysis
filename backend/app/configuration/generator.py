@@ -237,8 +237,14 @@ class DeviceContextBuilder:
         device: Device,
     ) -> DeviceConfigurationContext:
         endpoint = next(
-            endpoint for endpoint in topology.endpoints if endpoint.device_id == device.id
+            (endpoint for endpoint in topology.endpoints if endpoint.device_id == device.id),
+            None,
         )
+        if endpoint is None:
+            raise ConfigurationSyntaxError(
+                "VPCS device "
+                f"'{device.hostname}' ({device.id}) is missing an endpoint record in the topology specification.",
+            )
         subnet = _resolve_endpoint_network(topology, endpoint)
 
         return DeviceConfigurationContext(

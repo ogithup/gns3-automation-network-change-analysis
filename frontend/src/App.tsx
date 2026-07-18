@@ -2,20 +2,20 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppLayout } from "./components/AppLayout";
 import {
-  AddressingPage,
+  AddressingPageV2,
   ApprovalPage,
   AuditPage,
   ChangeBuilderPage,
   ComparisonPage,
-  ConfigurationPage,
+  ConfigurationPageV2,
   ConnectionPage,
   DeploymentPage,
   LiveTopologyPage,
-  OverviewPage,
-  ProjectsPage,
+  OverviewPageV2,
+  ProjectsPageV2,
   RiskPage,
   RollbackPage,
-  TopologyBuilderPage,
+  TopologyBuilderPageV2,
   ValidationPage,
 } from "./pages/WorkflowPages";
 
@@ -23,12 +23,12 @@ export default function App() {
   return (
     <Routes>
       <Route element={<AppLayout />}>
-        <Route path="/" element={<OverviewPage />} />
+        <Route path="/" element={<OverviewPageV2 />} />
         <Route path="/connection" element={<ConnectionPage />} />
-        <Route path="/projects" element={<ProjectsPage />} />
-        <Route path="/topology" element={<TopologyBuilderPage />} />
-        <Route path="/addressing" element={<AddressingPage />} />
-        <Route path="/configuration" element={<ConfigurationPage />} />
+        <Route path="/projects" element={<ProjectsPageV2 />} />
+        <Route path="/topology" element={<TopologyBuilderPageV2 />} />
+        <Route path="/addressing" element={<AddressingPageV2 />} />
+        <Route path="/configuration" element={<ConfigurationPageV2 />} />
         <Route path="/deployment" element={<DeploymentPage />} />
         <Route path="/live-topology" element={<LiveTopologyPage />} />
         <Route path="/validation" element={<ValidationPage />} />

@@ -58,6 +58,25 @@ function toneForDevice(
   return mode === "draft" ? "device-node--draft" : "device-node--proposed";
 }
 
+function edgeTone(
+  sourceDeviceId: string,
+  targetDeviceId: string,
+  deployment?: DeploymentRecordResponse | null,
+  mode: "draft" | "current" | "impact" = "draft",
+) {
+  if (mode === "draft") {
+    return "topology-edge--draft";
+  }
+  const source = deployment?.discovered_state?.device_snapshots.find((item) => item.device_id === sourceDeviceId);
+  const target = deployment?.discovered_state?.device_snapshots.find((item) => item.device_id === targetDeviceId);
+  if (!source || !target) {
+    return "topology-edge--draft";
+  }
+  const sourceUp = source.discovered_state.interfaces.some((item) => item.status === "up");
+  const targetUp = target.discovered_state.interfaces.some((item) => item.status === "up");
+  return sourceUp && targetUp ? "topology-edge--up" : "topology-edge--down";
+}
+
 export function TopologyCanvas(props: TopologyCanvasProps) {
   const nodes = useMemo<Node[]>(() => props.topology.devices.map((device, index) => ({
     id: device.id,
@@ -79,11 +98,22 @@ export function TopologyCanvas(props: TopologyCanvasProps) {
     source: link.source_device,
     target: link.target_device,
     label: `${link.source_interface} -> ${link.target_interface}`,
+    className: edgeTone(link.source_device, link.target_device, props.deployment, props.mode),
+    style: {
+      strokeWidth: 2.4,
+      stroke: props.mode === "current" ? "#3aa35c" : "#7a8ea4",
+    },
+    labelStyle: {
+      fill: "#435a70",
+      fontSize: 11,
+      fontWeight: 600,
+    },
     markerEnd: {
       type: MarkerType.ArrowClosed,
+      color: props.mode === "current" ? "#3aa35c" : "#7a8ea4",
     },
-    animated: props.mode === "impact",
-  })), [props.mode, props.topology.links]);
+    animated: props.mode === "impact" || props.mode === "current",
+  })), [props.deployment, props.mode, props.topology.links]);
 
   return (
     <div className="topology-canvas">

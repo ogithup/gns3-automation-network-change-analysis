@@ -14,6 +14,7 @@ import {
   ChangeRecordResponse,
   DeploymentRecordResponse,
   DeviceType,
+  SavedTopologyRecord,
   TopologySpec,
   WorkflowProgressEvent,
 } from "../types/workflow";
@@ -26,6 +27,8 @@ type WorkflowState = {
   addressPlan: AddressingPlan | null;
   activeDeployment: DeploymentRecordResponse | null;
   deployments: DeploymentRecordResponse[];
+  savedTopologies: SavedTopologyRecord[];
+  activeTopologyId: string | null;
   activeChange: ChangeRecordResponse | null;
   changes: ChangeRecordResponse[];
   progressEvents: Record<string, WorkflowProgressEvent[]>;
@@ -35,7 +38,9 @@ type WorkflowState = {
 type WorkflowStore = WorkflowState & {
   setTopologyDraft: (topology: TopologySpec) => void;
   updateProjectName: (name: string) => void;
+  updateDeviceHostname: (deviceId: string, hostname: string) => void;
   addDevice: (deviceType: DeviceType) => void;
+  addLink: (sourceDeviceId: string, sourceInterface: string, targetDeviceId: string, targetInterface: string) => void;
   addVlan: () => void;
   undo: () => void;
   redo: () => void;
@@ -43,6 +48,10 @@ type WorkflowStore = WorkflowState & {
   setAddressPlan: (plan: AddressingPlan | null) => void;
   setActiveDeployment: (deployment: DeploymentRecordResponse | null) => void;
   upsertDeployment: (deployment: DeploymentRecordResponse) => void;
+  saveTopology: (name?: string) => void;
+  loadSavedTopology: (topologyId: string) => void;
+  deleteSavedTopology: (topologyId: string) => void;
+  resetDraftToDefault: () => void;
   setActiveChange: (change: ChangeRecordResponse | null) => void;
   upsertChange: (change: ChangeRecordResponse) => void;
   appendProgressEvent: (workflowId: string, event: WorkflowProgressEvent) => void;
@@ -58,6 +67,9 @@ type Action =
   | { type: "SET_ADDRESS_PLAN"; plan: AddressingPlan | null }
   | { type: "UPSERT_DEPLOYMENT"; deployment: DeploymentRecordResponse }
   | { type: "SET_ACTIVE_DEPLOYMENT"; deployment: DeploymentRecordResponse | null }
+  | { type: "SAVE_TOPOLOGY"; record: SavedTopologyRecord }
+  | { type: "LOAD_SAVED_TOPOLOGY"; topologyId: string }
+  | { type: "DELETE_SAVED_TOPOLOGY"; topologyId: string }
   | { type: "UPSERT_CHANGE"; change: ChangeRecordResponse }
   | { type: "SET_ACTIVE_CHANGE"; change: ChangeRecordResponse | null }
   | { type: "APPEND_PROGRESS"; workflowId: string; event: WorkflowProgressEvent }
@@ -65,6 +77,48 @@ type Action =
   | { type: "RESET" };
 
 const STORAGE_KEY = "nettwin-ai-sprint15";
+
+function normalizeTopology(topology: TopologySpec): TopologySpec {
+  const endpointsByDeviceId = new Map(
+    topology.endpoints.map((endpoint) => [endpoint.device_id, endpoint]),
+  );
+  const firstVlan = topology.vlans[0];
+  const firstSubnet = topology.subnets.find((subnet) => subnet.vlan_id === firstVlan?.vlan_id);
+  const synthesizedEndpoints = topology.devices
+    .filter((device) => device.type === "endpoint" && !endpointsByDeviceId.has(device.id))
+    .map((device, index) => ({
+      id: `${device.id}-endpoint`,
+      device_id: device.id,
+      hostname: device.hostname,
+      ip_address: firstVlan ? `192.168.${firstVlan.vlan_id}.${10 + topology.endpoints.length + index}` : `192.168.1.${10 + topology.endpoints.length + index}`,
+      vlan_id: firstVlan?.vlan_id,
+      subnet_id: firstSubnet?.id,
+      default_gateway: firstVlan?.gateway,
+    }));
+
+  if (synthesizedEndpoints.length === 0) {
+    return topology;
+  }
+
+  const endpointIds = new Set(topology.endpoints.map((endpoint) => endpoint.id));
+  return {
+    ...topology,
+    endpoints: [...topology.endpoints, ...synthesizedEndpoints],
+    vlans: topology.vlans.map((vlan, vlanIndex) => (
+      vlanIndex === 0
+        ? {
+          ...vlan,
+          endpoint_ids: [
+            ...(vlan.endpoint_ids ?? []),
+            ...synthesizedEndpoints
+              .map((endpoint) => endpoint.id)
+              .filter((endpointId) => !endpointIds.has(endpointId)),
+          ],
+        }
+        : vlan
+    )),
+  };
+}
 
 const initialState: WorkflowState = {
   topologyDraft: defaultTopology,
@@ -81,6 +135,15 @@ const initialState: WorkflowState = {
   addressPlan: null,
   activeDeployment: null,
   deployments: [],
+  savedTopologies: [
+    {
+      id: "three-vlan-office",
+      name: defaultTopology.project.name,
+      topology: defaultTopology,
+      updated_at: new Date("2026-07-18T00:00:00.000Z").toISOString(),
+    },
+  ],
+  activeTopologyId: "three-vlan-office",
   activeChange: null,
   changes: [],
   progressEvents: {},
@@ -136,6 +199,17 @@ function reducer(state: WorkflowState, action: Action): WorkflowState {
         selectedWorkflowId: action.deployment.id,
       };
     }
+    case "SAVE_TOPOLOGY": {
+      const savedTopologies = [
+        action.record,
+        ...state.savedTopologies.filter((item) => item.id !== action.record.id),
+      ];
+      return {
+        ...state,
+        savedTopologies,
+        activeTopologyId: action.record.id,
+      };
+    }
     case "SET_ACTIVE_DEPLOYMENT":
       return {
         ...state,
@@ -160,13 +234,41 @@ function reducer(state: WorkflowState, action: Action): WorkflowState {
         activeChange: action.change,
         selectedWorkflowId: action.change?.id ?? state.selectedWorkflowId,
       };
+    case "LOAD_SAVED_TOPOLOGY": {
+      const selected = state.savedTopologies.find((item) => item.id === action.topologyId);
+      if (!selected) {
+        return state;
+      }
+      return {
+        ...state,
+        history: [...state.history, state.topologyDraft],
+        future: [],
+        topologyDraft: selected.topology,
+        activeTopologyId: selected.id,
+      };
+    }
+    case "DELETE_SAVED_TOPOLOGY": {
+      const savedTopologies = state.savedTopologies.filter((item) => item.id !== action.topologyId);
+      const nextActiveTopology = savedTopologies[0] ?? null;
+      return {
+        ...state,
+        savedTopologies,
+        activeTopologyId: state.activeTopologyId === action.topologyId ? nextActiveTopology?.id ?? null : state.activeTopologyId,
+        topologyDraft: state.activeTopologyId === action.topologyId ? nextActiveTopology?.topology ?? defaultTopology : state.topologyDraft,
+      };
+    }
     case "APPEND_PROGRESS": {
       const existing = state.progressEvents[action.workflowId] ?? [];
+      const duplicate = existing.find((item) => item.status === action.event.status && item.timestamp === action.event.timestamp);
+      if (duplicate) {
+        return state;
+      }
+      const nextEvents = [...existing, action.event].slice(-12);
       return {
         ...state,
         progressEvents: {
           ...state.progressEvents,
-          [action.workflowId]: [...existing, action.event],
+          [action.workflowId]: nextEvents,
         },
       };
     }
@@ -188,13 +290,18 @@ function parseStoredState(raw: string | null): WorkflowState | null {
     return {
       ...initialState,
       ...parsed,
-      topologyDraft: parsed.topologyDraft ?? initialState.topologyDraft,
-      history: parsed.history ?? initialState.history,
-      future: parsed.future ?? initialState.future,
+      topologyDraft: normalizeTopology(parsed.topologyDraft ?? initialState.topologyDraft),
+      history: (parsed.history ?? initialState.history).map(normalizeTopology),
+      future: (parsed.future ?? initialState.future).map(normalizeTopology),
       addressRequest: parsed.addressRequest ?? initialState.addressRequest,
       addressPlan: parsed.addressPlan ?? initialState.addressPlan,
       activeDeployment: parsed.activeDeployment ?? initialState.activeDeployment,
       deployments: parsed.deployments ?? initialState.deployments,
+      savedTopologies: (parsed.savedTopologies ?? initialState.savedTopologies).map((record) => ({
+        ...record,
+        topology: normalizeTopology(record.topology),
+      })),
+      activeTopologyId: parsed.activeTopologyId ?? initialState.activeTopologyId,
       activeChange: parsed.activeChange ?? initialState.activeChange,
       changes: parsed.changes ?? initialState.changes,
       progressEvents: parsed.progressEvents ?? initialState.progressEvents,
@@ -232,24 +339,94 @@ export function WorkflowStoreProvider(props: PropsWithChildren) {
         },
       });
     },
+    updateDeviceHostname(deviceId, hostname) {
+      dispatch({
+        type: "SET_TOPOLOGY",
+        topology: {
+          ...state.topologyDraft,
+          devices: state.topologyDraft.devices.map((device) => device.id === deviceId ? { ...device, hostname } : device),
+          endpoints: state.topologyDraft.endpoints.map((endpoint) => endpoint.device_id === deviceId ? { ...endpoint, hostname } : endpoint),
+        },
+      });
+    },
     addDevice(deviceType) {
       const nextIndex = state.topologyDraft.devices.length + 1;
       const idPrefix = deviceType === "router" ? "r" : deviceType === "switch" ? "sw" : "ep";
       const platform = deviceType === "router" ? "iosv" : deviceType === "switch" ? "iosvl2" : "vpcs";
-      const interfaceName = deviceType === "endpoint" ? "Ethernet0" : "GigabitEthernet0/0";
+      const interfaces = deviceType === "endpoint"
+        ? [{ name: "Ethernet0", enabled: true }]
+        : Array.from({ length: 4 }, (_, index) => ({
+          name: `GigabitEthernet0/${index}`,
+          enabled: true,
+        }));
       const newDevice = {
         id: `${idPrefix}${nextIndex}`,
         hostname: `${deviceType.toUpperCase()}-${nextIndex}`,
         type: deviceType,
         platform,
         site_id: state.topologyDraft.sites[0]?.id,
-        interfaces: [{ name: interfaceName, enabled: true }],
+        interfaces,
       };
+      const firstVlan = state.topologyDraft.vlans[0];
+      const firstSubnet = state.topologyDraft.subnets.find((subnet) => subnet.vlan_id === firstVlan?.vlan_id);
+      const newEndpoint = deviceType === "endpoint"
+        ? {
+          id: `${newDevice.id}-endpoint`,
+          device_id: newDevice.id,
+          hostname: newDevice.hostname,
+          ip_address: firstVlan ? `192.168.${firstVlan.vlan_id}.${10 + state.topologyDraft.endpoints.length}` : `192.168.1.${10 + state.topologyDraft.endpoints.length}`,
+          vlan_id: firstVlan?.vlan_id,
+          subnet_id: firstSubnet?.id,
+          default_gateway: firstVlan?.gateway,
+        }
+        : null;
       dispatch({
         type: "SET_TOPOLOGY",
         topology: {
           ...state.topologyDraft,
           devices: [...state.topologyDraft.devices, newDevice],
+          endpoints: newEndpoint
+            ? [...state.topologyDraft.endpoints, newEndpoint]
+            : state.topologyDraft.endpoints,
+          vlans: newEndpoint && firstVlan
+            ? state.topologyDraft.vlans.map((vlan) => (
+              vlan.vlan_id === firstVlan.vlan_id
+                ? {
+                  ...vlan,
+                  endpoint_ids: [...(vlan.endpoint_ids ?? []), newEndpoint.id],
+                }
+                : vlan
+            ))
+            : state.topologyDraft.vlans,
+        },
+      });
+    },
+    addLink(sourceDeviceId, sourceInterface, targetDeviceId, targetInterface) {
+      if (!sourceDeviceId || !sourceInterface || !targetDeviceId || !targetInterface || sourceDeviceId === targetDeviceId) {
+        return;
+      }
+      const exists = state.topologyDraft.links.some((link) =>
+        link.source_device === sourceDeviceId
+        && link.source_interface === sourceInterface
+        && link.target_device === targetDeviceId
+        && link.target_interface === targetInterface,
+      );
+      if (exists) {
+        return;
+      }
+      dispatch({
+        type: "SET_TOPOLOGY",
+        topology: {
+          ...state.topologyDraft,
+          links: [
+            ...state.topologyDraft.links,
+            {
+              source_device: sourceDeviceId,
+              source_interface: sourceInterface,
+              target_device: targetDeviceId,
+              target_interface: targetInterface,
+            },
+          ],
         },
       });
     },
@@ -290,6 +467,31 @@ export function WorkflowStoreProvider(props: PropsWithChildren) {
     },
     upsertDeployment(deployment) {
       dispatch({ type: "UPSERT_DEPLOYMENT", deployment });
+    },
+    saveTopology(name) {
+      const topologyName = (name ?? state.topologyDraft.project.name).trim() || "untitled-topology";
+      const record: SavedTopologyRecord = {
+        id: topologyName.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+        name: topologyName,
+        topology: {
+          ...state.topologyDraft,
+          project: {
+            ...state.topologyDraft.project,
+            name: topologyName,
+          },
+        },
+        updated_at: new Date().toISOString(),
+      };
+      dispatch({ type: "SAVE_TOPOLOGY", record });
+    },
+    loadSavedTopology(topologyId) {
+      dispatch({ type: "LOAD_SAVED_TOPOLOGY", topologyId });
+    },
+    deleteSavedTopology(topologyId) {
+      dispatch({ type: "DELETE_SAVED_TOPOLOGY", topologyId });
+    },
+    resetDraftToDefault() {
+      dispatch({ type: "SET_TOPOLOGY", topology: defaultTopology });
     },
     setActiveChange(change) {
       dispatch({ type: "SET_ACTIVE_CHANGE", change });

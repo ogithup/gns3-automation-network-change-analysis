@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { workflowClient, fetchHealth } from "../api/client";
@@ -7,11 +7,14 @@ import { EmptyState, JsonPanel, MetricTile, SectionCard, StatusPill } from "../c
 import { TopologyCanvas } from "../components/TopologyCanvas";
 import { useWorkflowProgress } from "../hooks/useWorkflowProgress";
 import {
+  AddressingPlan,
   AddressingRequest,
   ChangeCommandPayload,
   DeterministicExplanation,
   GeneratedReport,
+  InterpretedTopologyPlan,
   RootCauseAnalysisResult,
+  SavedTopologyRecord,
   TopologySpec,
   WorkflowProgressEvent,
 } from "../types/workflow";
@@ -62,9 +65,457 @@ function validationLabel(topology: TopologySpec, index: number) {
   return `${requirement.source_endpoint_id} -> ${requirement.target_endpoint_id}`;
 }
 
+function formatTimestamp(value: string) {
+  return new Date(value).toLocaleString("tr-TR");
+}
+
+function topologyEquals(left: TopologySpec | null | undefined, right: TopologySpec | null | undefined) {
+  if (!left || !right) {
+    return false;
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function networkBaseIp(cidr: string) {
+  return cidr.split("/")[0] ?? "192.168.1.0";
+}
+
+function addIpv4Offset(ipAddress: string, offset: number) {
+  const octets = ipAddress.split(".").map((item) => Number(item));
+  if (octets.length !== 4 || octets.some((item) => Number.isNaN(item))) {
+    return ipAddress;
+  }
+  let value = (((octets[0] * 256) + octets[1]) * 256 + octets[2]) * 256 + octets[3];
+  value += offset;
+  return [
+    (value >>> 24) & 255,
+    (value >>> 16) & 255,
+    (value >>> 8) & 255,
+    value & 255,
+  ].join(".");
+}
+
+type BilingualInsight = {
+  tone: "neutral" | "success" | "warning" | "danger" | "info";
+  titleTr: string;
+  titleEn: string;
+  detailsTr: string[];
+  detailsEn: string[];
+};
+
+function ipv4ToInt(ipAddress: string) {
+  const octets = ipAddress.split(".").map((item) => Number(item));
+  if (octets.length !== 4 || octets.some((item) => Number.isNaN(item) || item < 0 || item > 255)) {
+    return null;
+  }
+  return ((((octets[0] * 256) + octets[1]) * 256) + octets[2]) * 256 + octets[3];
+}
+
+function parseCidr(value: string) {
+  const [ipAddress, prefixText] = value.split("/");
+  const prefix = Number(prefixText);
+  const ipValue = ipv4ToInt(ipAddress ?? "");
+  if (ipValue === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+    return null;
+  }
+  const size = 2 ** (32 - prefix);
+  const networkStart = Math.floor(ipValue / size) * size;
+  const usableHosts = prefix >= 31 ? 0 : Math.max(size - 2, 0);
+  return {
+    ipAddress,
+    prefix,
+    size,
+    networkStart,
+    usableHosts,
+    aligned: ipValue === networkStart,
+  };
+}
+
+function requiredPrefixForHosts(hostCount: number) {
+  if (hostCount <= 0) {
+    return null;
+  }
+  for (let prefix = 30; prefix >= 1; prefix -= 1) {
+    const usableHosts = prefix >= 31 ? 0 : Math.max((2 ** (32 - prefix)) - 2, 0);
+    if (usableHosts >= hostCount) {
+      return prefix;
+    }
+  }
+  return null;
+}
+
+function isPrivateIpv4(value: string) {
+  const parsed = parseCidr(`${value}/32`);
+  if (!parsed) {
+    return false;
+  }
+  const firstOctet = Number(value.split(".")[0] ?? "0");
+  const secondOctet = Number(value.split(".")[1] ?? "0");
+  return firstOctet === 10
+    || (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31)
+    || (firstOctet === 192 && secondOctet === 168);
+}
+
+function buildAddressingInsights(topology: TopologySpec, request: AddressingRequest, plan: AddressingPlan | null) {
+  const insights: BilingualInsight[] = [];
+  const parsedBase = parseCidr(request.base_network);
+  const totalAllocationFootprint = request.segments.reduce((total, segment) => {
+    const prefix = requiredPrefixForHosts(segment.host_count);
+    if (prefix === null) {
+      return total;
+    }
+    return total + (2 ** (32 - prefix));
+  }, 0);
+
+  if (!parsedBase) {
+    insights.push({
+      tone: "danger",
+      titleTr: "Base network geçersiz",
+      titleEn: "Base network is invalid",
+      detailsTr: [
+        "CIDR biçimi beklenir. Örnek: 10.10.0.0/16",
+        "IP adresi ve prefix birlikte girilmelidir; prefix 0 ile 32 arasında olmalıdır.",
+      ],
+      detailsEn: [
+        "A CIDR format is required. Example: 10.10.0.0/16",
+        "The value must include both an IPv4 address and a prefix between 0 and 32.",
+      ],
+    });
+  } else {
+    const baseIpPrivate = isPrivateIpv4(parsedBase.ipAddress);
+    const networkCapacity = parsedBase.size;
+    if (!parsedBase.aligned) {
+      insights.push({
+        tone: "warning",
+        titleTr: "Base network ağ sınırında değil",
+        titleEn: "Base network is not aligned to a network boundary",
+        detailsTr: [
+          `${request.base_network} bir subnet başlangıcı değil. Örneğin /24 için .0 ile başlayan ağ kullanılmalıdır.`,
+          "Bu durumda planner beklenmedik sonuç üretebilir veya backend isteği reddedebilir.",
+        ],
+        detailsEn: [
+          `${request.base_network} is not the start of a subnet. For example, a /24 should start at .0.`,
+          "In that case the planner may produce unexpected output or the backend may reject the request.",
+        ],
+      });
+    }
+    if (!baseIpPrivate) {
+      insights.push({
+        tone: "warning",
+        titleTr: "Özel IPv4 aralığı önerilir",
+        titleEn: "A private IPv4 range is recommended",
+        detailsTr: [
+          "Lab topolojilerinde 10.0.0.0/8, 172.16.0.0/12 veya 192.168.0.0/16 kullanmak daha güvenlidir.",
+          "Public aralıklar gerçek ağlarla çakışma veya yorum karmaşası yaratabilir.",
+        ],
+        detailsEn: [
+          "For lab topologies, 10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16 is safer.",
+          "Public ranges can create conflicts or confusing results in a simulated environment.",
+        ],
+      });
+    }
+    if (totalAllocationFootprint > networkCapacity) {
+      insights.push({
+        tone: "danger",
+        titleTr: "Base network kapasitesi yetmiyor",
+        titleEn: "Base network capacity is insufficient",
+        detailsTr: [
+          `İstenen segmentler için yaklaşık ${totalAllocationFootprint} adreslik alan gerekiyor, fakat ${request.base_network} yalnızca ${networkCapacity} adres kapsıyor.`,
+          "Daha geniş bir base network seçmeli veya host sayılarını düşürmelisin.",
+        ],
+        detailsEn: [
+          `The requested segments need roughly ${totalAllocationFootprint} addresses, but ${request.base_network} covers only ${networkCapacity}.`,
+          "Choose a larger base network or reduce the host counts.",
+        ],
+      });
+    } else {
+      insights.push({
+        tone: "success",
+        titleTr: "Base network kapasitesi uygun görünüyor",
+        titleEn: "Base network capacity looks acceptable",
+        detailsTr: [
+          `${request.base_network} toplam kapasitesi, şu anki segment isteklerini karşılayabilecek seviyede.`,
+        ],
+        detailsEn: [
+          `${request.base_network} appears large enough for the current segment requests.`,
+        ],
+      });
+    }
+  }
+
+  request.segments.forEach((segment, index) => {
+    const linkedVlan = topology.vlans[index];
+    const endpointCount = linkedVlan ? topology.endpoints.filter((endpoint) => endpoint.vlan_id === linkedVlan.vlan_id).length : 0;
+    const requiredPrefix = requiredPrefixForHosts(segment.host_count);
+    if (segment.host_count <= 0 || Number.isNaN(segment.host_count)) {
+      insights.push({
+        tone: "danger",
+        titleTr: `${segment.name} host değeri geçersiz`,
+        titleEn: `${segment.name} host value is invalid`,
+        detailsTr: [
+          "Host sayısı 1 veya daha büyük olmalıdır.",
+          "0 veya negatif değerler ağ planlama açısından uygulanamaz.",
+        ],
+        detailsEn: [
+          "The host count must be at least 1.",
+          "Zero or negative values cannot be allocated in a valid network plan.",
+        ],
+      });
+      return;
+    }
+    if (!requiredPrefix) {
+      insights.push({
+        tone: "danger",
+        titleTr: `${segment.name} çok büyük`,
+        titleEn: `${segment.name} is too large`,
+        detailsTr: [
+          `${segment.host_count} host tek bir standart IPv4 segmentinde karşılanamıyor.`,
+        ],
+        detailsEn: [
+          `${segment.host_count} hosts cannot be satisfied by a single standard IPv4 segment.`,
+        ],
+      });
+      return;
+    }
+
+    const detailsTr = [`Bu istek için en küçük uygun subnet yaklaşık /${requiredPrefix} olur.`];
+    const detailsEn = [`The smallest practical subnet for this request is about /${requiredPrefix}.`];
+    if (endpointCount > segment.host_count) {
+      insights.push({
+        tone: "danger",
+        titleTr: `${segment.name} için host sayısı yetersiz`,
+        titleEn: `Host count is too small for ${segment.name}`,
+        detailsTr: [
+          `Topology içinde bu segmente bağlı en az ${endpointCount} endpoint var, fakat sen ${segment.host_count} host girdin.`,
+          "Gateway, switch management veya gelecekteki büyüme için de adres bırakman gerekir.",
+          ...detailsTr,
+        ],
+        detailsEn: [
+          `The topology already has at least ${endpointCount} endpoints tied to this segment, but you entered only ${segment.host_count} hosts.`,
+          "You should also reserve addresses for the gateway, switch management, or future growth.",
+          ...detailsEn,
+        ],
+      });
+      return;
+    }
+    if (!linkedVlan) {
+      insights.push({
+        tone: "warning",
+        titleTr: `${segment.name} için topology eşleşmesi yok`,
+        titleEn: `No topology match found for ${segment.name}`,
+        detailsTr: [
+          "Bu segment şu an bir VLAN ile eşleşmiyor. IP plan üretilse bile config tarafına doğrudan yansımayabilir.",
+        ],
+        detailsEn: [
+          "This segment does not currently match a VLAN. The IP plan may generate, but it may not map directly into configuration output.",
+        ],
+      });
+      return;
+    }
+    if (plan && !plan.allocations.find((allocation) => allocation.name.toUpperCase() === segment.name.toUpperCase())) {
+      insights.push({
+        tone: "warning",
+        titleTr: `${segment.name} çıktıda görünmedi`,
+        titleEn: `${segment.name} did not appear in the output`,
+        detailsTr: [
+          "Planner bu segment için allocation döndürmedi. Bu genelde kapasite, isim eşleşmesi veya validation kaynaklıdır.",
+        ],
+        detailsEn: [
+          "The planner did not return an allocation for this segment. That usually points to capacity, name matching, or validation issues.",
+        ],
+      });
+      return;
+    }
+    insights.push({
+      tone: "info",
+      titleTr: `${segment.name} segment yorumu`,
+      titleEn: `${segment.name} segment interpretation`,
+      detailsTr: [
+        `${segment.host_count} host isteği topology açısından uygulanabilir görünüyor.`,
+        `${endpointCount} endpoint şu an bu segment ile ilişkili.`,
+        ...detailsTr,
+      ],
+      detailsEn: [
+        `The ${segment.host_count}-host request looks acceptable for the current topology.`,
+        `${endpointCount} endpoints are currently associated with this segment.`,
+        ...detailsEn,
+      ],
+    });
+  });
+
+  return insights;
+}
+
+function interpretTopologySummary(plan: InterpretedTopologyPlan) {
+  if (plan.blocked) {
+    return {
+      title: "Interpretation blocked",
+      lines: [
+        "The prompt is ambiguous or contains safety issues.",
+        "Review the clarification questions and warnings before using the result.",
+      ],
+    };
+  }
+  const topology = plan.topology;
+  if (!topology) {
+    return {
+      title: "Preview only",
+      lines: [
+        "The interpreter produced a preview but not a full topology object.",
+        "Check clarifications and warnings before continuing.",
+      ],
+    };
+  }
+  return {
+    title: "Interpreted result",
+    lines: [
+      `Project: ${topology.project.name}`,
+      `${topology.devices.length} devices, ${topology.links.length} links, ${topology.vlans.length} VLANs, ${topology.endpoints.length} endpoints`,
+      plan.warnings.length > 0 ? `${plan.warnings.length} warnings still need review.` : "No warnings were returned.",
+    ],
+  };
+}
+
+function interfaceExplanation(deviceType: string, interfaceName: string) {
+  const lower = interfaceName.toLowerCase();
+  if (deviceType === "router" && lower.startsWith("gigabitethernet")) {
+    return {
+      tr: `${interfaceName} router fiziksel portudur. Router-to-switch uplink için kullanılır; VLAN taşıyacaksan genelde trunk tarafında alt arayüzlerle birlikte çalışır.`,
+      en: `${interfaceName} is a physical router port. Use it for router-to-switch uplinks; if VLANs traverse the link, it usually works with router subinterfaces.`,
+    };
+  }
+  if (deviceType === "switch" && lower.startsWith("gigabitethernet")) {
+    return {
+      tr: `${interfaceName} switch portudur. Endpoint bağlıysa access port, router veya başka switch bağlıysa çoğu durumda trunk/uplink mantığıyla düşünülmelidir.`,
+      en: `${interfaceName} is a switch port. Use it as an access port for endpoints; if it connects to a router or another switch, it usually behaves as a trunk/uplink.`,
+    };
+  }
+  if (deviceType === "endpoint") {
+    return {
+      tr: `${interfaceName} endpoint NIC arayüzüdür. Genelde yalnızca switch access portuna bağlanmalıdır; endpoint-to-endpoint doğrudan bağlantı çoğu senaryoda hedef değildir.`,
+      en: `${interfaceName} is an endpoint NIC. It should normally connect to a switch access port; direct endpoint-to-endpoint links are unusual for this workflow.`,
+    };
+  }
+  return {
+    tr: `${interfaceName} seçili cihaz arayüzüdür; bağlantı türünü cihaz rolüne göre belirlemelisin.`,
+    en: `${interfaceName} belongs to the selected device; choose the link style according to the device role.`,
+  };
+}
+
+function buildConfigurationTerminalFlow(platform: string, content: string) {
+  const lines = content
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+
+  if (platform === "vpcs") {
+    return [
+      "connect console",
+      ...lines,
+    ];
+  }
+
+  const commandLines = lines.filter((line) => line.trim() !== "!" && line.trim() !== "end");
+  return [
+    "enable",
+    "configure terminal",
+    ...commandLines,
+    "end",
+    "write memory",
+  ];
+}
+
+function mutationErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "Unexpected workflow error.";
+}
+
+function applyAddressPlanToTopology(topology: TopologySpec, plan: AddressingPlan) {
+  const allocationsByName = new Map(plan.allocations.map((allocation) => [allocation.name.toUpperCase(), allocation]));
+  const nextVlans = topology.vlans.map((vlan) => {
+    const allocation = allocationsByName.get(vlan.name.toUpperCase());
+    if (!allocation) {
+      return vlan;
+    }
+    return {
+      ...vlan,
+      subnet: allocation.network,
+      gateway: allocation.gateway,
+    };
+  });
+
+  const nextSubnets = topology.subnets.map((subnet) => {
+    const linkedVlan = nextVlans.find((vlan) => vlan.vlan_id === subnet.vlan_id);
+    if (!linkedVlan) {
+      return subnet;
+    }
+    return {
+      ...subnet,
+      network: linkedVlan.subnet ?? subnet.network,
+      gateway: linkedVlan.gateway ?? subnet.gateway,
+    };
+  });
+
+  const nextEndpoints = topology.endpoints.map((endpoint, index) => {
+    const vlan = nextVlans.find((item) => item.vlan_id === endpoint.vlan_id);
+    if (!vlan?.subnet) {
+      return endpoint;
+    }
+    const baseIp = networkBaseIp(vlan.subnet);
+    return {
+      ...endpoint,
+      ip_address: addIpv4Offset(baseIp, 10 + index),
+      default_gateway: vlan.gateway ?? endpoint.default_gateway,
+    };
+  });
+
+  const nextDevices = topology.devices.map((device) => {
+    if (device.type === "router") {
+      return {
+        ...device,
+        interfaces: device.interfaces.map((iface) => {
+          const suffix = iface.name.split(".")[1];
+          const vlanId = suffix ? Number(suffix) : null;
+          const linkedVlan = vlanId ? nextVlans.find((item) => item.vlan_id === vlanId) : null;
+          if (!linkedVlan?.gateway) {
+            return iface;
+          }
+          return {
+            ...iface,
+            ipv4_address: `${linkedVlan.gateway}/${linkedVlan.subnet?.split("/")[1] ?? "24"}`,
+          };
+        }),
+      };
+    }
+    if (device.type === "switch") {
+      return {
+        ...device,
+        interfaces: device.interfaces.map((iface) => {
+          if (typeof iface.access_vlan !== "number") {
+            return iface;
+          }
+          return iface;
+        }),
+      };
+    }
+    return device;
+  });
+
+  return {
+    ...topology,
+    vlans: nextVlans,
+    subnets: nextSubnets,
+    endpoints: nextEndpoints,
+    devices: nextDevices,
+  };
+}
+
 export function OverviewPage() {
-  const { topologyDraft, activeDeployment, activeChange, progressEvents, selectedWorkflowId } = useWorkflowStore();
+  const { topologyDraft, activeDeployment, activeChange, progressEvents, selectedWorkflowId, savedTopologies, activeTopologyId } = useWorkflowStore();
   const events = latestWorkflowEvents(progressEvents, selectedWorkflowId);
+  const activeTopology = savedTopologies.find((item) => item.id === activeTopologyId) ?? null;
 
   return (
     <div className="page-grid">
@@ -75,11 +526,14 @@ export function OverviewPage() {
           ))}
           <MetricTile label="Deployment state" value={activeDeployment?.status ?? "Not created"} tone="default" />
           <MetricTile label="Change state" value={activeChange?.status ?? "No draft change"} tone="default" />
+          <MetricTile label="Saved topologies" value={savedTopologies.length} tone="default" />
+          <MetricTile label="Active topology" value={activeTopology?.name ?? topologyDraft.project.name} tone="accent" />
         </div>
       </SectionCard>
 
-      <SectionCard title="Topology Storyboard" subtitle="Draft topology and impact-ready visual language.">
+      <SectionCard title="Topology Storyboard" subtitle="The saved or currently edited topology is rendered here for quick verification.">
         <TopologyCanvas topology={topologyDraft} deployment={activeDeployment} change={activeChange} mode="draft" />
+        {activeTopology ? <p className="inline-note">Last saved topology: <strong>{activeTopology.name}</strong> • Updated: {formatTimestamp(activeTopology.updated_at)}</p> : null}
       </SectionCard>
 
       <SectionCard title="Latest Workflow Events" subtitle="Live deployment or change application events replay here.">
@@ -140,7 +594,17 @@ export function ConnectionPage() {
 }
 
 export function ProjectsPage() {
-  const { deployments, activeDeployment, topologyDraft, upsertDeployment, setActiveDeployment } = useWorkflowStore();
+  const {
+    deployments,
+    activeDeployment,
+    topologyDraft,
+    upsertDeployment,
+    setActiveDeployment,
+    savedTopologies,
+    activeTopologyId,
+    loadSavedTopology,
+    deleteSavedTopology,
+  } = useWorkflowStore();
   const createDeploymentMutation = useMutation({
     mutationFn: () => workflowClient.createDeployment(topologyDraft.project.name, topologyDraft),
     onSuccess: (deployment) => {
@@ -150,9 +614,29 @@ export function ProjectsPage() {
 
   return (
     <div className="page-grid">
+      <SectionCard title="Saved Topologies" subtitle="Locally saved topology drafts appear here and can be reopened or removed.">
+        {savedTopologies.length === 0 ? (
+          <EmptyState title="No saved topologies" description="Save a topology from the builder page to reuse it here." />
+        ) : (
+          <div className="list-grid">
+            {savedTopologies.map((record: SavedTopologyRecord) => (
+              <article key={record.id} className={`list-card list-card--static ${activeTopologyId === record.id ? "list-card--active" : ""}`}>
+                <strong>{record.name}</strong>
+                <span>{record.id}</span>
+                <small>{formatTimestamp(record.updated_at)}</small>
+                <div className="button-row">
+                  <button className="button button--secondary" onClick={() => loadSavedTopology(record.id)} type="button">Load</button>
+                  <button className="button button--danger" onClick={() => deleteSavedTopology(record.id)} type="button">Delete</button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
       <SectionCard
         title="Network Project List"
-        subtitle="Current workflow stores created deployments locally and on the backend workflow API."
+        subtitle="Backend deployment records created from the selected or edited topology."
         actions={<button className="button" onClick={() => createDeploymentMutation.mutate()}>Create Project</button>}
       >
         {deployments.length === 0 ? (
@@ -333,6 +817,10 @@ export function ConfigurationPage() {
                   <StatusPill value={rendered.content_hash.slice(0, 12)} tone="info" />
                 </div>
                 <pre>{rendered.content}</pre>
+                <div className="stack">
+                  <strong>Terminal command flow</strong>
+                  <pre>{buildConfigurationTerminalFlow(rendered.platform, rendered.content).join("\n")}</pre>
+                </div>
               </article>
             ))}
           </div>
@@ -356,25 +844,38 @@ export function DeploymentPage() {
     },
   });
   const configureMutation = useMutation({
-    mutationFn: (deploymentId: string) => workflowClient.configureDeployment(deploymentId),
+    mutationFn: async (deploymentId: string) => {
+      await workflowClient.configureDeployment(deploymentId);
+      return workflowClient.getDeployment(deploymentId);
+    },
     onSuccess: (deployment) => {
       store.upsertDeployment(deployment);
     },
   });
   const discoverMutation = useMutation({
-    mutationFn: (deploymentId: string) => workflowClient.discoverDeployment(deploymentId),
+    mutationFn: async (deploymentId: string) => {
+      await workflowClient.discoverDeployment(deploymentId);
+      return workflowClient.getDeployment(deploymentId);
+    },
     onSuccess: (deployment) => {
       store.upsertDeployment(deployment);
     },
   });
   const validateMutation = useMutation({
-    mutationFn: (deploymentId: string) => workflowClient.validateDeployment(deploymentId),
+    mutationFn: async (deploymentId: string) => {
+      await workflowClient.validateDeployment(deploymentId);
+      return workflowClient.getDeployment(deploymentId);
+    },
     onSuccess: (deployment) => {
       store.upsertDeployment(deployment);
     },
   });
 
   const events = latestWorkflowEvents(store.progressEvents, activeDeployment?.id ?? null);
+  const configurationReady = Boolean(activeDeployment?.configuration_preview?.rendered_configurations?.length);
+  const discoveryReady = Boolean(activeDeployment?.discovered_state?.device_snapshots?.length);
+  const validationReady = Boolean(activeDeployment?.validations?.length);
+  const latestError = createDeploymentMutation.error ?? configureMutation.error ?? discoverMutation.error ?? validateMutation.error;
 
   return (
     <div className="page-grid">
@@ -390,6 +891,26 @@ export function DeploymentPage() {
           </div>
         )}
       >
+        <div className="guide-grid">
+          <article className="list-card list-card--static">
+            <strong>Turkce aciklama</strong>
+            <span>`Deploy` mevcut topology taslagini backend'e gonderir ve dry-run GNS3 plani olusturur.</span>
+            <span>`Configure` cihaz konfigürasyon onizlemesini backend tarafinda uretir.</span>
+            <span>`Discover` calisan durum bilgisini okumayi, `Run Validation` ise test sonucunu guncellemeyi hedefler.</span>
+          </article>
+          <article className="list-card list-card--static">
+            <strong>English guide</strong>
+            <span>`Deploy` sends the current topology draft to the backend and builds a dry-run GNS3 plan.</span>
+            <span>`Configure` generates the device configuration preview on the backend.</span>
+            <span>`Discover` refreshes runtime state, and `Run Validation` refreshes validation results.</span>
+          </article>
+        </div>
+        {latestError ? (
+          <article className="list-card list-card--static">
+            <strong>Workflow error</strong>
+            <span>{mutationErrorMessage(latestError)}</span>
+          </article>
+        ) : null}
         {activeDeployment ? (
           <div className="stack">
             <div className="metric-grid">
@@ -397,9 +918,29 @@ export function DeploymentPage() {
               <MetricTile label="Status" value={activeDeployment.status} />
               <MetricTile label="Dry-run nodes" value={activeDeployment.dry_run_plan?.node_requests?.length ?? 0} />
               <MetricTile label="Dry-run links" value={activeDeployment.dry_run_plan?.link_requests?.length ?? 0} />
+              <MetricTile label="Configure result" value={configurationReady ? "Ready" : "Pending"} tone={configurationReady ? "success" : "default"} />
+              <MetricTile label="Discover result" value={discoveryReady ? "Ready" : "Pending"} tone={discoveryReady ? "success" : "default"} />
+              <MetricTile label="Validation result" value={validationReady ? "Ready" : "Pending"} tone={validationReady ? "success" : "default"} />
+            </div>
+            <div className="guide-grid">
+              <article className="list-card list-card--static">
+                <strong>Configure</strong>
+                <span>Purpose: build topology-based device configs from the current project draft.</span>
+                <small>Status: {configureMutation.isPending ? "Running" : configurationReady ? "Configuration preview created" : "Not completed yet"}</small>
+              </article>
+              <article className="list-card list-card--static">
+                <strong>Discover</strong>
+                <span>Purpose: read back runtime device, interface, VLAN, route, and ACL state.</span>
+                <small>Status: {discoverMutation.isPending ? "Running" : discoveryReady ? "Discovered state available" : "Not completed yet"}</small>
+              </article>
+              <article className="list-card list-card--static">
+                <strong>Run Validation</strong>
+                <span>Purpose: execute verification and connectivity checks on the current deployment.</span>
+                <small>Status: {validateMutation.isPending ? "Running" : validationReady ? "Validation results available" : "Not completed yet"}</small>
+              </article>
             </div>
             <div className="timeline">
-              {events.map((event, index) => (
+              {(events.length ? events : [{ status: "Draft" }]).map((event, index) => (
                 <div key={`${event.status}-${index}`} className="timeline__item">
                   <StatusPill value={event.status} tone={progressTone(event.status)} />
                 </div>
@@ -852,6 +1393,667 @@ export function AuditPage() {
           </div>
         ) : (
           <EmptyState title="No report generated" description="Generate a report after deployment and change analysis to preview the release-style artifact." />
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+export function OverviewPageV2() {
+  const { topologyDraft, activeDeployment, activeChange, progressEvents, selectedWorkflowId, savedTopologies, activeTopologyId } = useWorkflowStore();
+  const events = latestWorkflowEvents(progressEvents, selectedWorkflowId);
+  const activeTopology = savedTopologies.find((item) => item.id === activeTopologyId) ?? null;
+
+  return (
+    <div className="page-grid">
+      <SectionCard title="Workflow Snapshot" subtitle="Current draft, saved topology, deployment, and change state.">
+        <div className="metric-grid">
+          {topologySummary(topologyDraft).map((item) => (
+            <MetricTile key={item.label} label={item.label} value={item.value} tone="accent" />
+          ))}
+          <MetricTile label="Saved topologies" value={savedTopologies.length} />
+          <MetricTile label="Active topology" value={activeTopology?.name ?? topologyDraft.project.name} tone="accent" />
+          <MetricTile label="Deployment state" value={activeDeployment?.status ?? "Not created"} tone="default" />
+          <MetricTile label="Change state" value={activeChange?.status ?? "No draft change"} tone="default" />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Topology Storyboard" subtitle="The active topology draft is always mirrored here.">
+        <TopologyCanvas topology={topologyDraft} deployment={activeDeployment} change={activeChange} mode="draft" />
+        {activeTopology ? <p className="inline-note">Saved topology shown in overview: <strong>{activeTopology.name}</strong> • {formatTimestamp(activeTopology.updated_at)}</p> : null}
+      </SectionCard>
+
+      <SectionCard title="Latest Workflow Events" subtitle="Live deployment or change application events replay here.">
+        {events.length === 0 ? (
+          <EmptyState title="No workflow yet" description="Create a deployment or change to start collecting progress events." />
+        ) : (
+          <div className="timeline">
+            {events.map((event, index) => (
+              <div key={`${event.status}-${index}`} className="timeline__item">
+                <StatusPill value={event.status} tone={progressTone(event.status)} />
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+export function ProjectsPageV2() {
+  const {
+    deployments,
+    activeDeployment,
+    topologyDraft,
+    upsertDeployment,
+    setActiveDeployment,
+    savedTopologies,
+    activeTopologyId,
+    loadSavedTopology,
+    deleteSavedTopology,
+  } = useWorkflowStore();
+  const createDeploymentMutation = useMutation({
+    mutationFn: () => workflowClient.createDeployment(topologyDraft.project.name, topologyDraft),
+    onSuccess: (deployment) => {
+      upsertDeployment(deployment);
+    },
+  });
+
+  return (
+    <div className="page-grid">
+      <SectionCard title="Saved Topologies" subtitle="Topologies saved from the builder are listed here.">
+        {savedTopologies.length === 0 ? (
+          <EmptyState title="No saved topologies" description="Save a topology from the builder page to reuse it here." />
+        ) : (
+          <div className="list-grid">
+            {savedTopologies.map((record) => (
+              <article key={record.id} className={`list-card list-card--static ${activeTopologyId === record.id ? "list-card--active" : ""}`}>
+                <strong>{record.name}</strong>
+                <span>{record.id}</span>
+                <small>{formatTimestamp(record.updated_at)}</small>
+                <div className="button-row">
+                  <button className="button button--secondary" type="button" onClick={() => loadSavedTopology(record.id)}>Load</button>
+                  <button className="button button--danger" type="button" onClick={() => deleteSavedTopology(record.id)}>Delete</button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="Deployment Projects"
+        subtitle="Backend deployment records created from the active topology."
+        actions={<button className="button" onClick={() => createDeploymentMutation.mutate()}>Create Project</button>}
+      >
+        {deployments.length === 0 ? (
+          <EmptyState title="No deployment records" description="Create a deployment from the current topology draft." />
+        ) : (
+          <div className="list-grid">
+            {deployments.map((deployment) => (
+              <button
+                key={deployment.id}
+                className={`list-card ${activeDeployment?.id === deployment.id ? "list-card--active" : ""}`}
+                onClick={() => setActiveDeployment(deployment)}
+                type="button"
+              >
+                <strong>{deployment.project_name}</strong>
+                <span>{deployment.id}</span>
+                <StatusPill value={deployment.status} tone="info" />
+              </button>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+export function TopologyBuilderPageV2() {
+  const store = useWorkflowStore();
+  const [projectName, setProjectName] = useState(store.topologyDraft.project.name);
+  const [prompt, setPrompt] = useState("Üç VLAN'lı küçük ofis ağı kur. Guest ağı Admin ağına erişemesin.");
+  const examplePrompts = [
+    "Uc VLAN'li kucuk ofis agi kur. Guest agi Admin agina erisemesin.",
+    "Create a two-router branch topology with OSPF between HQ and branch.",
+    "Build a simple office topology with one router, one switch, and two endpoints.",
+  ];
+  const [sourceDeviceId, setSourceDeviceId] = useState(store.topologyDraft.devices[0]?.id ?? "");
+  const [targetDeviceId, setTargetDeviceId] = useState(store.topologyDraft.devices[1]?.id ?? "");
+  const [sourceInterface, setSourceInterface] = useState(store.topologyDraft.devices[0]?.interfaces[0]?.name ?? "");
+  const [targetInterface, setTargetInterface] = useState(store.topologyDraft.devices[1]?.interfaces[0]?.name ?? "");
+  const interpretTopologyMutation = useMutation({
+    mutationFn: (inputPrompt: string) =>
+      workflowClient.interpretTopology(inputPrompt, {
+        current_topology: store.topologyDraft,
+      }),
+    onSuccess: (response) => {
+      if (response.interpretation.topology) {
+        store.setTopologyDraft(response.interpretation.topology);
+        setProjectName(response.interpretation.topology.project.name);
+      }
+    },
+  });
+
+  useEffect(() => {
+    setProjectName(store.topologyDraft.project.name);
+  }, [store.topologyDraft.project.name]);
+
+  useEffect(() => {
+    const sourceDevice = store.topologyDraft.devices.find((device) => device.id === sourceDeviceId) ?? store.topologyDraft.devices[0];
+    const targetDevice = store.topologyDraft.devices.find((device) => device.id === targetDeviceId) ?? store.topologyDraft.devices[1] ?? store.topologyDraft.devices[0];
+    setSourceDeviceId(sourceDevice?.id ?? "");
+    setTargetDeviceId(targetDevice?.id ?? "");
+    setSourceInterface(sourceDevice?.interfaces[0]?.name ?? "");
+    setTargetInterface(targetDevice?.interfaces[0]?.name ?? "");
+  }, [sourceDeviceId, store.topologyDraft.devices, targetDeviceId]);
+
+  const saveTopology = () => {
+    store.updateProjectName(projectName);
+    store.saveTopology(projectName);
+  };
+
+  const sourceDevice = store.topologyDraft.devices.find((device) => device.id === sourceDeviceId) ?? null;
+  const targetDevice = store.topologyDraft.devices.find((device) => device.id === targetDeviceId) ?? null;
+  const sourceInterfaceGuide = sourceDevice ? interfaceExplanation(sourceDevice.type, sourceInterface) : null;
+  const targetInterfaceGuide = targetDevice ? interfaceExplanation(targetDevice.type, targetInterface) : null;
+  const interpretedSummary = interpretTopologyMutation.data ? interpretTopologySummary(interpretTopologyMutation.data.interpretation) : null;
+
+  return (
+    <div className="page-grid">
+      <SectionCard
+        title="Visual Topology Builder"
+        subtitle="Build, save, delete, and rebuild topologies from this page."
+        actions={(
+          <div className="button-row">
+            <button className="button button--secondary" onClick={store.undo}>Undo</button>
+            <button className="button button--secondary" onClick={store.redo}>Redo</button>
+            <button className="button button--secondary" onClick={() => store.resetDraftToDefault()}>Reset Default</button>
+          </div>
+        )}
+      >
+        <div className="builder-toolbar">
+          <label className="field">
+            <span>Project name</span>
+            <input value={projectName} onChange={(event) => setProjectName(event.target.value)} />
+          </label>
+          <button className="button" onClick={saveTopology}>Save Topology</button>
+          <button className="button button--secondary" onClick={() => store.setTopologyDraft(defaultTopologyFallback())}>Clear Draft</button>
+          <button className="button button--secondary" onClick={() => store.addDevice("router")}>Add Router</button>
+          <button className="button button--secondary" onClick={() => store.addDevice("switch")}>Add Switch</button>
+          <button className="button button--secondary" onClick={() => store.addDevice("endpoint")}>Add Endpoint</button>
+          <button className="button button--secondary" onClick={() => store.addVlan()}>Add VLAN</button>
+        </div>
+        <div className="builder-grid">
+          {store.topologyDraft.devices.map((device) => (
+            <label key={device.id} className="field">
+              <span>{device.type.toUpperCase()} hostname</span>
+              <input value={device.hostname} onChange={(event) => store.updateDeviceHostname(device.id, event.target.value)} />
+            </label>
+          ))}
+        </div>
+        <SectionCard title="Link Builder" subtitle="Connect devices by selecting source and target interfaces.">
+          <div className="builder-grid">
+            <label className="field">
+              <span>Source device</span>
+              <select value={sourceDeviceId} onChange={(event) => {
+                const nextId = event.target.value;
+                setSourceDeviceId(nextId);
+                const nextDevice = store.topologyDraft.devices.find((device) => device.id === nextId);
+                setSourceInterface(nextDevice?.interfaces[0]?.name ?? "");
+              }}>
+                {store.topologyDraft.devices.map((device) => <option key={device.id} value={device.id}>{device.hostname}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Source interface</span>
+              <select value={sourceInterface} onChange={(event) => setSourceInterface(event.target.value)}>
+                {(store.topologyDraft.devices.find((device) => device.id === sourceDeviceId)?.interfaces ?? []).map((iface) => <option key={iface.name} value={iface.name}>{iface.name}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Target device</span>
+              <select value={targetDeviceId} onChange={(event) => {
+                const nextId = event.target.value;
+                setTargetDeviceId(nextId);
+                const nextDevice = store.topologyDraft.devices.find((device) => device.id === nextId);
+                setTargetInterface(nextDevice?.interfaces[0]?.name ?? "");
+              }}>
+                {store.topologyDraft.devices.map((device) => <option key={device.id} value={device.id}>{device.hostname}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Target interface</span>
+              <select value={targetInterface} onChange={(event) => setTargetInterface(event.target.value)}>
+                {(store.topologyDraft.devices.find((device) => device.id === targetDeviceId)?.interfaces ?? []).map((iface) => <option key={iface.name} value={iface.name}>{iface.name}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="button-row">
+            <button className="button" type="button" onClick={() => store.addLink(sourceDeviceId, sourceInterface, targetDeviceId, targetInterface)}>Add Link</button>
+          </div>
+          <div className="comparison-grid">
+            <article className="list-card list-card--static">
+              <strong>Source interface guide</strong>
+              <span>{sourceInterfaceGuide?.tr ?? "Kaynak cihaz ve interface secildiginde burada aciklama gorunur."}</span>
+              <small>{sourceInterfaceGuide?.en ?? "Guidance appears here after you choose a source device and interface."}</small>
+            </article>
+            <article className="list-card list-card--static">
+              <strong>Target interface guide</strong>
+              <span>{targetInterfaceGuide?.tr ?? "Hedef cihaz ve interface secildiginde burada aciklama gorunur."}</span>
+              <small>{targetInterfaceGuide?.en ?? "Guidance appears here after you choose a target device and interface."}</small>
+            </article>
+          </div>
+          <div className="comparison-grid">
+            <article className="list-card list-card--static">
+              <strong>GigabitEthernet aciklamasi</strong>
+              <span>`GigabitEthernet0/0`, `GigabitEthernet0/1` gibi adlar router veya switch fiziksel portlarini temsil eder.</span>
+              <span>Router to Switch baglantisinda uplink olarak, Switch to Endpoint baglantisinda ise access port mantigiyla dusunulmelidir.</span>
+            </article>
+            <article className="list-card list-card--static">
+              <strong>Recommended link styles</strong>
+              <span>Router to Switch: uplink, often trunk-ready in VLAN scenarios.</span>
+              <span>Switch to Endpoint: single-VLAN access style connection.</span>
+              <span>Switch to Switch: trunk/uplink.</span>
+              <span>Endpoint to Endpoint: usually not recommended for this workflow.</span>
+            </article>
+          </div>
+        </SectionCard>
+        <div className="list-grid">
+          {store.savedTopologies.map((record) => (
+            <article key={record.id} className={`list-card list-card--static ${store.activeTopologyId === record.id ? "list-card--active" : ""}`}>
+              <strong>{record.name}</strong>
+              <small>{formatTimestamp(record.updated_at)}</small>
+              <div className="button-row">
+                <button className="button button--secondary" type="button" onClick={() => store.loadSavedTopology(record.id)}>Load</button>
+                <button className="button button--danger" type="button" onClick={() => store.deleteSavedTopology(record.id)}>Delete</button>
+              </div>
+            </article>
+          ))}
+        </div>
+        <TopologyCanvas topology={store.topologyDraft} deployment={store.activeDeployment} change={store.activeChange} mode="draft" />
+      </SectionCard>
+
+      <SectionCard title="Topology Builder Guide" subtitle="Türkçe ve English rehber.">
+        <div className="comparison-grid">
+          <article className="list-card list-card--static">
+            <strong>Türkçe</strong>
+            <span>1. Project name alanına topology adını yaz.</span>
+            <span>2. Router, switch ve endpoint ekledikten sonra üstte isimlerini değiştir.</span>
+            <span>3. Link Builder bölümünden source ve target interface seçip bağlantı oluştur.</span>
+            <span>3. Save Topology ile kaydet; yeni topology Overview ve Project List’te görünür.</span>
+            <span>4. Load ile tekrar aç, Delete ile kaldır.</span>
+            <span>5. Clear Draft boş topology başlatır; Reset Default örnek yapıyı geri getirir.</span>
+          </article>
+          <article className="list-card list-card--static">
+            <strong>English</strong>
+            <span>1. Enter the topology name in the project field.</span>
+            <span>2. After adding routers, switches, and endpoints, rename them in the hostname fields.</span>
+            <span>3. Use the Link Builder to connect source and target interfaces.</span>
+            <span>4. Save Topology to persist it; the new topology appears in Overview and Project List.</span>
+            <span>5. Clear Draft starts a blank topology; Reset Default restores the sample design.</span>
+          </article>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Validation-safe Draft JSON" subtitle="The UI edits a vendor-neutral topology specification that can be sent directly to the backend.">
+        <JsonPanel value={store.topologyDraft} />
+      </SectionCard>
+
+      <SectionCard
+        title="Natural Language Topology"
+        subtitle="Sprint 16 converts natural-language requirements into a validated TopologySpec preview."
+        actions={<button className="button" onClick={() => interpretTopologyMutation.mutate(prompt)}>Interpret Requirement</button>}
+      >
+        <div className="button-row">
+          {examplePrompts.map((item, index) => (
+            <button key={`${item}-${index}`} className="button button--secondary" type="button" onClick={() => setPrompt(item)}>
+              Example Prompt {index + 1}
+            </button>
+          ))}
+        </div>
+        <label className="field">
+          <span>Requirement prompt</span>
+          <textarea className="textarea" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+        </label>
+        {interpretedSummary ? (
+          <article className="list-card list-card--static">
+            <strong>{interpretedSummary.title}</strong>
+            {interpretedSummary.lines.map((line) => <span key={line}>{line}</span>)}
+          </article>
+        ) : null}
+        {interpretTopologyMutation.data ? (
+          <div className="comparison-grid">
+            <article className="list-card list-card--static">
+              <strong>Interpret result</strong>
+              {(interpretTopologyMutation.data.interpretation.warnings.length > 0
+                ? interpretTopologyMutation.data.interpretation.warnings
+                : ["No warnings returned."]
+              ).map((warning) => <span key={warning}>{warning}</span>)}
+            </article>
+            <article className="list-card list-card--static">
+              <strong>Clarifications</strong>
+              {(interpretTopologyMutation.data.interpretation.clarifications.length > 0
+                ? interpretTopologyMutation.data.interpretation.clarifications.map((item) => `${item.field}: ${item.question}`)
+                : ["No clarification needed."]
+              ).map((item) => <span key={item}>{item}</span>)}
+            </article>
+          </div>
+        ) : null}
+        {interpretTopologyMutation.data ? <JsonPanel value={interpretTopologyMutation.data.interpretation} /> : <EmptyState title="No AI interpretation yet" description="Submit a topology prompt to see the structured preview, clarifications, warnings, and interpretation notes." />}
+      </SectionCard>
+    </div>
+  );
+}
+
+export function AddressingPageV2() {
+  const store = useWorkflowStore();
+  const [request, setRequest] = useState<AddressingRequest>(store.addressRequest);
+  const createPlanMutation = useMutation({
+    mutationFn: (payload: AddressingRequest) => workflowClient.createIpPlan(payload),
+    onSuccess: (plan) => {
+      store.setAddressRequest(request);
+      store.setAddressPlan(plan);
+      store.setTopologyDraft(applyAddressPlanToTopology(store.topologyDraft, plan));
+    },
+  });
+
+  useEffect(() => {
+    if (request.segments.length === 0) {
+      setRequest({
+        ...request,
+        segments: [
+          ...store.topologyDraft.vlans.map((vlan) => ({
+            name: vlan.name,
+            host_count: Math.max(store.topologyDraft.endpoints.filter((endpoint) => endpoint.vlan_id === vlan.vlan_id).length + 10, 10),
+          })),
+        ],
+      });
+    }
+  }, [request, store.topologyDraft.endpoints, store.topologyDraft.vlans]);
+
+  const updateSegment = (index: number, field: "name" | "host_count", value: string) => {
+    const nextSegments = request.segments.map((segment, segmentIndex) => (
+      segmentIndex === index
+        ? {
+          ...segment,
+          [field]: field === "host_count" ? Number(value) : value,
+        }
+        : segment
+    ));
+    setRequest({ ...request, segments: nextSegments });
+  };
+
+  const addSegment = () => {
+    setRequest({
+      ...request,
+      segments: [
+        ...request.segments,
+        {
+          name: `SEGMENT-${request.segments.length + 1}`,
+          host_count: 10,
+        },
+      ],
+    });
+  };
+
+  const removeSegment = (index: number) => {
+    setRequest({
+      ...request,
+      segments: request.segments.filter((_, segmentIndex) => segmentIndex !== index),
+    });
+  };
+
+  const updateTopologyFromSegment = (index: number, field: "name" | "subnet" | "gateway", value: string) => {
+    const vlan = store.topologyDraft.vlans[index];
+    if (!vlan) {
+      return;
+    }
+    store.setTopologyDraft({
+      ...store.topologyDraft,
+      vlans: store.topologyDraft.vlans.map((item, itemIndex) => itemIndex === index ? {
+        ...item,
+        ...(field === "name" ? { name: value } : {}),
+        ...(field === "subnet" ? { subnet: value } : {}),
+        ...(field === "gateway" ? { gateway: value } : {}),
+      } : item),
+      subnets: store.topologyDraft.subnets.map((subnet) => subnet.vlan_id === vlan.vlan_id ? {
+        ...subnet,
+        ...(field === "name" ? { name: `${value} subnet` } : {}),
+        ...(field === "subnet" ? { network: value } : {}),
+        ...(field === "gateway" ? { gateway: value } : {}),
+      } : subnet),
+      devices: store.topologyDraft.devices.map((device) => device.type === "router" ? {
+        ...device,
+        interfaces: device.interfaces.map((iface) => iface.name.endsWith(`.${vlan.vlan_id}`) && field === "gateway"
+          ? { ...iface, ipv4_address: `${value}/${(store.topologyDraft.vlans[index]?.subnet ?? "192.168.1.0/24").split("/")[1] ?? "24"}` }
+          : iface),
+      } : device),
+    });
+  };
+
+  const updateEndpoint = (endpointId: string, field: "ip_address" | "default_gateway", value: string) => {
+    store.setTopologyDraft({
+      ...store.topologyDraft,
+      endpoints: store.topologyDraft.endpoints.map((endpoint) => endpoint.id === endpointId ? { ...endpoint, [field]: value } : endpoint),
+    });
+  };
+
+  const previewPlan: AddressingPlan = {
+    base_network: request.base_network,
+    reserved_networks: [],
+    report: "Manual or generated IP plan currently applied in the UI.",
+    allocations: request.segments.map((segment, index) => {
+      const linkedVlan = store.topologyDraft.vlans[index];
+      const linkedEndpoints = linkedVlan
+        ? store.topologyDraft.endpoints.filter((endpoint) => endpoint.vlan_id === linkedVlan.vlan_id)
+        : [];
+      return {
+        name: segment.name,
+        network: linkedVlan?.subnet ?? "",
+        gateway: linkedVlan?.gateway ?? "",
+        usable_host_count: segment.host_count,
+        allocated_addresses: Object.fromEntries(linkedEndpoints.map((endpoint) => [endpoint.hostname, endpoint.ip_address])),
+      };
+    }),
+  };
+
+  const applyManualPlan = () => {
+    const appliedPlan: AddressingPlan = {
+      base_network: request.base_network,
+      reserved_networks: [],
+      report: "Manual IP plan applied from the UI.",
+      allocations: previewPlan.allocations,
+    };
+    store.setAddressRequest(request);
+    store.setAddressPlan(appliedPlan);
+    store.saveTopology(store.topologyDraft.project.name);
+  };
+
+  const addressingInsights = buildAddressingInsights(store.topologyDraft, request, store.addressPlan);
+
+  return (
+    <div className="page-grid">
+      <SectionCard
+        title="IP Address Plan"
+        subtitle="Plan the IP ranges for the topology you created in Topology Builder."
+      >
+        <div className="button-row ip-plan-actions">
+          <button className="button" onClick={() => createPlanMutation.mutate(request)}>Generate Address Plan</button>
+          <button className="button button--secondary" onClick={applyManualPlan}>Apply Manual IP Plan</button>
+          <button className="button button--secondary" onClick={addSegment}>Add Segment</button>
+        </div>
+        <div className="ip-plan-layout">
+          <div className="ip-plan-sidebar">
+            <article className="list-card list-card--static">
+              <strong>Türkçe rehber</strong>
+              <span>1. Base network alanını gir.</span>
+              <span>2. Segment host sayılarını düzenleyip Generate Address Plan ile otomatik plan oluştur.</span>
+              <span>3. İstersen segment ekle veya sil; topology’ye göre segmentleri elle yönet.</span>
+              <span>4. Segment subnet/gateway ve endpoint IP alanlarını elle değiştir.</span>
+              <span>5. Apply Manual IP Plan ile output’u ve configuration akışını güncelle.</span>
+            </article>
+            <article className="list-card list-card--static">
+              <strong>English guide</strong>
+              <span>1. Enter the base network.</span>
+              <span>2. Edit host counts and use Generate Address Plan for automatic planning.</span>
+              <span>3. Add or remove segments based on the topology you built.</span>
+              <span>4. Manually edit the segment subnet/gateway and endpoint IP fields below.</span>
+              <span>5. Use Apply Manual IP Plan to update the output and configuration flow.</span>
+            </article>
+          </div>
+          <div className="ip-plan-main">
+            <label className="field ip-plan-field ip-plan-field--base">
+              <span>Base network</span>
+              <input value={request.base_network} onChange={(event) => setRequest({ ...request, base_network: event.target.value })} />
+            </label>
+            {request.segments.map((segment, index) => (
+              <div className="segment-row" key={`${segment.name}-${index}`}>
+                <label className="field ip-plan-field">
+                  <span>Segment</span>
+                  <input value={segment.name} onChange={(event) => updateSegment(index, "name", event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>Hosts</span>
+                  <input type="number" value={segment.host_count} onChange={(event) => updateSegment(index, "host_count", event.target.value)} />
+                </label>
+                <button className="button button--danger" type="button" onClick={() => removeSegment(index)}>Remove</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Planner Validation and Interpretation" subtitle="Bilingual warnings explain why a base network or host value may not fit the topology.">
+        <div className="comparison-grid">
+          {addressingInsights.map((insight, index) => (
+            <article key={`${insight.titleEn}-${index}`} className="list-card list-card--static">
+              <StatusPill value={insight.tone.toUpperCase()} tone={insight.tone} />
+              <strong>{insight.titleTr}</strong>
+              {insight.detailsTr.map((detail) => <span key={detail}>{detail}</span>)}
+              <small>{insight.titleEn}</small>
+              {insight.detailsEn.map((detail) => <small key={detail}>{detail}</small>)}
+            </article>
+          ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Manual Segment and Endpoint Mapping" subtitle="These values are tied to the topology project and feed the next configuration render.">
+        <div className="stack">
+          {request.segments.map((segment, index) => {
+            const linkedVlan = store.topologyDraft.vlans[index];
+            const linkedEndpoints = linkedVlan ? store.topologyDraft.endpoints.filter((endpoint) => endpoint.vlan_id === linkedVlan.vlan_id) : [];
+            return (
+            <article key={`${segment.name}-${index}`} className="list-card list-card--static">
+              <strong>{segment.name}</strong>
+              <div className="manual-segment-grid">
+                <label className="field ip-plan-field">
+                  <span>Segment name</span>
+                  <input value={segment.name} onChange={(event) => {
+                    updateSegment(index, "name", event.target.value);
+                    updateTopologyFromSegment(index, "name", event.target.value);
+                  }} />
+                </label>
+                <label className="field ip-plan-field">
+                  <span>Subnet</span>
+                  <input value={linkedVlan?.subnet ?? ""} onChange={(event) => updateTopologyFromSegment(index, "subnet", event.target.value)} />
+                </label>
+                <label className="field ip-plan-field">
+                  <span>Gateway</span>
+                  <input value={linkedVlan?.gateway ?? ""} onChange={(event) => updateTopologyFromSegment(index, "gateway", event.target.value)} />
+                </label>
+              </div>
+              {linkedEndpoints.map((endpoint) => (
+                <div key={endpoint.id} className="manual-endpoint-row">
+                  <label className="field ip-plan-field">
+                    <span>{endpoint.hostname} IP</span>
+                    <input value={endpoint.ip_address} onChange={(event) => updateEndpoint(endpoint.id, "ip_address", event.target.value)} />
+                  </label>
+                  <label className="field ip-plan-field">
+                    <span>{endpoint.hostname} Gateway</span>
+                    <input value={endpoint.default_gateway ?? ""} onChange={(event) => updateEndpoint(endpoint.id, "default_gateway", event.target.value)} />
+                  </label>
+                </div>
+              ))}
+            </article>
+          );})}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Generated / Applied Address Output" subtitle="The latest automatic or manual plan appears here.">
+        <JsonPanel value={store.addressPlan ?? previewPlan} />
+      </SectionCard>
+    </div>
+  );
+}
+
+export function ConfigurationPageV2() {
+  const store = useWorkflowStore();
+  const activeDeployment = store.activeDeployment;
+  const deploymentIsSynced = topologyEquals(activeDeployment?.topology ?? null, store.topologyDraft);
+  const generateConfigurationMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeDeployment || !deploymentIsSynced) {
+        const deployment = await workflowClient.createDeployment(store.topologyDraft.project.name, store.topologyDraft);
+        store.upsertDeployment(deployment);
+        await workflowClient.configureDeployment(deployment.id);
+        return workflowClient.getDeployment(deployment.id);
+      }
+      await workflowClient.configureDeployment(activeDeployment.id);
+      return workflowClient.getDeployment(activeDeployment.id);
+    },
+    onSuccess: (deployment) => {
+      store.upsertDeployment(deployment);
+    },
+  });
+  const configurationReady = Boolean(activeDeployment?.configuration_preview?.rendered_configurations?.length);
+
+  return (
+    <div className="page-grid">
+      <SectionCard
+        title="Configuration Preview"
+        subtitle="Configurations are rendered from the current topology draft and the latest IP plan."
+        actions={<button className="button" onClick={() => generateConfigurationMutation.mutate()}>Generate Configurations</button>}
+      >
+        <div className="guide-grid">
+          <article className="list-card list-card--static">
+            <strong>Turkce aciklama</strong>
+            <span>Bu sayfa topology ve IP plan bilgisinden uretilen router, switch ve endpoint konfigürasyonlarini gosterir.</span>
+            <span>`Generate Configurations` gerekiyorsa once deployment kaydi olusturur, sonra backend'den guncel konfigürasyon onizlemesini ceker.</span>
+          </article>
+          <article className="list-card list-card--static">
+            <strong>English guide</strong>
+            <span>This page shows the generated router, switch, and endpoint configurations derived from the topology and IP plan.</span>
+            <span>`Generate Configurations` creates or refreshes the deployment as needed, then fetches the latest preview from the backend.</span>
+          </article>
+        </div>
+        <div className="metric-grid">
+          <MetricTile label="Configuration state" value={configurationReady ? "Configured" : generateConfigurationMutation.isPending ? "Generating" : "Not generated"} tone={configurationReady ? "success" : "default"} />
+          <MetricTile label="Project sync" value={deploymentIsSynced ? "Synced" : "Draft changed"} tone={deploymentIsSynced ? "success" : "accent"} />
+          <MetricTile label="Rendered devices" value={activeDeployment?.configuration_preview?.rendered_configurations?.length ?? 0} tone="accent" />
+        </div>
+        {generateConfigurationMutation.error ? (
+          <article className="list-card list-card--static">
+            <strong>Configuration error</strong>
+            <span>{mutationErrorMessage(generateConfigurationMutation.error)}</span>
+          </article>
+        ) : null}
+        {!activeDeployment ? <p className="inline-note">No backend project is selected yet. Generate Configurations will create one from the current draft automatically.</p> : null}
+        {activeDeployment && !deploymentIsSynced ? <p className="inline-note">The current draft changed after the last project sync. Generate Configurations will refresh the backend project with the new topology and IP plan.</p> : null}
+        {!activeDeployment || !activeDeployment.configuration_preview ? (
+          <EmptyState title="No configuration preview yet" description="Use Generate Configurations to sync the current topology draft and render updated device configs." />
+        ) : (
+          <div className="stack">
+            {activeDeployment.configuration_preview.rendered_configurations.map((rendered) => (
+              <article key={rendered.device_id} className="config-card">
+                <div className="config-card__header">
+                  <strong>{rendered.device_hostname}</strong>
+                  <StatusPill value={rendered.content_hash.slice(0, 12)} tone="info" />
+                </div>
+                <pre>{rendered.content}</pre>
+              </article>
+            ))}
+          </div>
         )}
       </SectionCard>
     </div>
