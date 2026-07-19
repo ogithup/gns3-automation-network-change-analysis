@@ -971,6 +971,70 @@ What this validates:
 - WebSocket progress consumer for deployment and change workflows
 - local undo, redo, and autosave behavior for the draft topology
 
+## UI Walkthrough
+
+The Sprint 15 operator UI now covers topology creation, IP planning, configuration preview, deployment progress, live topology inspection, and validation guidance. The screenshots below match the current repository state and can be used as a visual guide when demonstrating the workflow on GitHub.
+
+### Overview
+
+The overview page summarizes the active topology, deployment state, change state, and mirrors the current topology storyboard.
+
+![Overview](overview.png)
+
+### Project List
+
+Saved topologies created from the builder are listed here. Operators can load an existing topology draft or delete a saved one before continuing with the workflow.
+
+![Project List](project-list.png)
+
+### Topology Builder
+
+The topology builder is used to name devices, add routers/switches/endpoints/VLANs, and create links through interface-aware selections. It also explains how `GigabitEthernet` uplinks and endpoint access links should be used.
+
+![Topology Builder](topology-builder.png)
+
+### Validation-safe Draft JSON
+
+Every UI action updates a vendor-neutral `TopologySpec` draft. This JSON view is useful for debugging, backend validation, and comparing the UI state with the API payload.
+
+![Validation-safe Draft JSON](validation-safe-page.png)
+
+### IP Address Plan
+
+The IP planning page supports automatic VLSM generation and manual segment planning. It also provides bilingual guidance so users can understand when a base network or host request fits the current topology.
+
+![IP Address Plan](ip-address-plan.png)
+
+### Manual Segment and Endpoint Mapping
+
+After IP planning, each segment exposes editable subnet, gateway, endpoint IP, and endpoint gateway fields. These values feed the next configuration render and now stay synchronized with topology assignments.
+
+![Manual Segment and Endpoint Mapping](manuel-segment-endpoint.png)
+
+### Configuration Preview
+
+The configuration page renders per-device router, switch, and VPCS configuration output derived from the topology and addressing data. This is the final deterministic preview before apply/discover/validate steps.
+
+![Configuration Preview](configuration-page.png)
+
+### Deployment Progress
+
+The deployment page shows the dry-run workflow, configuration generation state, discovery state, validation status, and WebSocket-backed progress history for the active deployment.
+
+![Deployment Progress](deployment-progress.png)
+
+### Live Network Topology
+
+The live topology page visualizes discovered device and link state. It helps compare the intended topology against runtime-style discovered status and interface health.
+
+![Live Network Topology](live-network-topology.png)
+
+### Validation Results
+
+The validation page displays model-based reachability outcomes and user-friendly bilingual remediation guidance. Endpoint names, segment names, suggested field values, and page-by-page fix steps are shown directly in the result cards.
+
+![Validation Results](validation-results.png)
+
 ## Sprint 15 Usage
 
 ### Start the Backend API

@@ -834,43 +834,89 @@ function applyAddressPlanToTopology(topology: TopologySpec, plan: AddressingPlan
     endpoint_ids: endpointIdsByVlan.get(vlan.vlan_id) ?? [],
   }));
 
+  const nextTopology = {
+    ...topology,
+    vlans: finalizedVlans,
+    subnets: nextSubnets,
+    endpoints: nextEndpoints,
+  };
+  return synchronizeTopologyAssignments(nextTopology);
+}
+
+function synchronizeTopologyAssignments(topology: TopologySpec): TopologySpec {
+  const deviceById = new Map(topology.devices.map((device) => [device.id, device]));
+  const endpointByDeviceId = new Map(topology.endpoints.map((endpoint) => [endpoint.device_id, endpoint]));
+  const uplinkLink = topology.links.find((link) => {
+    const source = deviceById.get(link.source_device);
+    const target = deviceById.get(link.target_device);
+    return (source?.type === "router" && target?.type === "switch")
+      || (source?.type === "switch" && target?.type === "router");
+  });
+  const allVlanIds = topology.vlans.map((vlan) => vlan.vlan_id);
+
   const nextDevices = topology.devices.map((device) => {
-      if (device.type === "router") {
-        return {
-          ...device,
-          interfaces: device.interfaces.map((iface) => {
-            const suffix = iface.name.split(".")[1];
-            const vlanId = suffix ? Number(suffix) : null;
-            const linkedVlan = vlanId ? finalizedVlans.find((item) => item.vlan_id === vlanId) : null;
-            if (!linkedVlan?.gateway) {
-              return iface;
-            }
-            return {
-              ...iface,
-            ipv4_address: `${linkedVlan.gateway}/${linkedVlan.subnet?.split("/")[1] ?? "24"}`,
-          };
-        }),
-      };
-    }
     if (device.type === "switch") {
       return {
         ...device,
         interfaces: device.interfaces.map((iface) => {
-          if (typeof iface.access_vlan !== "number") {
-            return iface;
+          const endpointLink = topology.links.find((link) => (
+            (link.source_device === device.id && link.source_interface === iface.name && endpointByDeviceId.has(link.target_device))
+            || (link.target_device === device.id && link.target_interface === iface.name && endpointByDeviceId.has(link.source_device))
+          ));
+          if (endpointLink) {
+            const endpointDeviceId = endpointLink.source_device === device.id ? endpointLink.target_device : endpointLink.source_device;
+            const endpoint = endpointByDeviceId.get(endpointDeviceId);
+            return {
+              ...iface,
+              access_vlan: endpoint?.vlan_id,
+              trunk_vlans: [],
+            };
+          }
+          const isUplink = uplinkLink && (
+            (uplinkLink.source_device === device.id && uplinkLink.source_interface === iface.name)
+            || (uplinkLink.target_device === device.id && uplinkLink.target_interface === iface.name)
+          );
+          if (isUplink) {
+            return {
+              ...iface,
+              access_vlan: undefined,
+              trunk_vlans: allVlanIds,
+            };
           }
           return iface;
         }),
       };
     }
+
+    if (device.type === "router") {
+      const baseInterfaces = device.interfaces.filter((iface) => !iface.name.includes("."));
+      const existingSubinterfaces = device.interfaces.filter((iface) => iface.name.includes("."));
+      const routerUplinkInterface = uplinkLink
+        ? (uplinkLink.source_device === device.id ? uplinkLink.source_interface : uplinkLink.target_device === device.id ? uplinkLink.target_interface : null)
+        : null;
+      const autoSubinterfaces = routerUplinkInterface
+        ? topology.vlans.map((vlan) => ({
+          name: `${routerUplinkInterface}.${vlan.vlan_id}`,
+          enabled: true,
+          ipv4_address: vlan.gateway && vlan.subnet ? `${vlan.gateway}/${vlan.subnet.split("/")[1] ?? "24"}` : undefined,
+        }))
+        : [];
+      const preservedSubinterfaces = existingSubinterfaces.filter((iface) => !autoSubinterfaces.some((auto) => auto.name === iface.name));
+      return {
+        ...device,
+        interfaces: [
+          ...baseInterfaces,
+          ...autoSubinterfaces,
+          ...preservedSubinterfaces,
+        ],
+      };
+    }
+
     return device;
   });
 
   return {
     ...topology,
-    vlans: finalizedVlans,
-    subnets: nextSubnets,
-    endpoints: nextEndpoints,
     devices: nextDevices,
   };
 }
@@ -2288,7 +2334,7 @@ export function AddressingPageV2() {
           ...(field === "gateway" ? { gateway: value } : {}),
         },
       ];
-    store.setTopologyDraft({
+    store.setTopologyDraft(synchronizeTopologyAssignments({
       ...store.topologyDraft,
       vlans: nextVlans,
       subnets: nextSubnets,
@@ -2303,14 +2349,14 @@ export function AddressingPageV2() {
         subnet_id: nextSubnets.find((item) => item.vlan_id === vlan.vlan_id)?.id ?? endpoint.subnet_id,
         ...(field === "gateway" ? { default_gateway: value } : {}),
       } : endpoint),
-    });
+    }));
   };
 
   const updateEndpoint = (endpointId: string, field: "ip_address" | "default_gateway", value: string) => {
-    store.setTopologyDraft({
+    store.setTopologyDraft(synchronizeTopologyAssignments({
       ...store.topologyDraft,
       endpoints: store.topologyDraft.endpoints.map((endpoint) => endpoint.id === endpointId ? { ...endpoint, [field]: value } : endpoint),
-    });
+    }));
   };
 
   const previewPlan: AddressingPlan = {
