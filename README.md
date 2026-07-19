@@ -1035,6 +1035,18 @@ The validation page displays model-based reachability outcomes and user-friendly
 
 ![Validation Results](validation-results.png)
 
+### Before / After Comparison
+
+The before/after page shows the deterministic simulation result side by side. Operators can compare the pre-change reachable paths with the post-change failure stages, evaluated routes, ACL decisions, and technical explanations before approving any action.
+
+![Before / After Comparison](before-after-comparison.png)
+
+### Impact Topology
+
+The impact topology visualizes the same change result on the network graph. Normal links stay neutral, transit devices are highlighted, affected endpoints turn red, and broken paths are emphasized so the operator can immediately see where the simulated change disrupts the topology.
+
+![Impact Topology](before-after-comparison-impact-topology.png)
+
 ## Sprint 15 Usage
 
 ### Start the Backend API
