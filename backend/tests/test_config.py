@@ -9,4 +9,6 @@ def test_default_settings_are_loaded() -> None:
     assert settings.app_name == "NetTwin AI"
     assert settings.gns3_server_url == "http://localhost:3080"
     assert settings.gns3_request_timeout > 0
-
+    assert settings.ai_provider == "auto"
+    assert settings.gemini_model
+    assert settings.gemini_request_timeout > 0

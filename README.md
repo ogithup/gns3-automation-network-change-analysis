@@ -64,7 +64,8 @@ examples/
 - `simulation`: isolated change simulation engine
 - `impact`: impact detection and risk scoring
 - `rollback`: rollback planning and execution
-- `reporting`: reports, audits, and exports
+- `reporting`: reports
+, audits, and exports
 - `ai`: structured LLM integration layer
 - `api`: FastAPI transport layer
 

@@ -47,10 +47,24 @@ def test_workflow_api_end_to_end() -> None:
 
     ai_topology_response = client.post(
         "/api/v1/ai/topology",
-        json={"prompt": "Üç VLAN'lı küçük ofis ağı kur. Guest ağı Admin ağına erişemesin."},
+        json={"prompt": "Uc VLAN'li kucuk ofis agi kur. Guest agi Admin agina erisemesin."},
     )
     assert ai_topology_response.status_code == 200
     assert ai_topology_response.json()["interpretation"]["topology"]["project"]["name"] == "ai-three-vlan-office"
+
+    ai_ospf_response = client.post(
+        "/api/v1/ai/topology",
+        json={"prompt": "Create a two-router branch topology with OSPF between HQ and branch."},
+    )
+    assert ai_ospf_response.status_code == 200
+    assert ai_ospf_response.json()["interpretation"]["topology"]["project"]["name"] == "ai-two-router-ospf"
+
+    ai_simple_response = client.post(
+        "/api/v1/ai/topology",
+        json={"prompt": "Build a simple office topology with one router, one switch, and two endpoints."},
+    )
+    assert ai_simple_response.status_code == 200
+    assert ai_simple_response.json()["interpretation"]["topology"]["project"]["name"] == "ai-simple-office"
 
     validate_response = client.post("/api/v1/specifications/validate", json={"specification": _sample_spec()})
     assert validate_response.status_code == 200
@@ -78,7 +92,7 @@ def test_workflow_api_end_to_end() -> None:
     ai_change_response = client.post(
         "/api/v1/ai/change",
         json={
-            "prompt": "STUDENT VLAN'ını trunk bağlantısından kaldır.",
+            "prompt": "STUDENT VLAN'ini trunk baglantisindan kaldir.",
             "deployment_id": deployment_id,
         },
     )

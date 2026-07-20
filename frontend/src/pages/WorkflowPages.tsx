@@ -58,6 +58,88 @@ function topologySummary(topology: TopologySpec) {
   ];
 }
 
+function recommendedBaseNetwork(topology: TopologySpec) {
+  const preferredSubnet =
+    topology.vlans.find((vlan) => vlan.subnet)?.subnet
+    ?? topology.subnets.find((subnet) => !subnet.network.endsWith("/30") && !subnet.network.endsWith("/31"))?.network
+    ?? topology.subnets[0]?.network;
+
+  if (!preferredSubnet) {
+    return "10.10.0.0/16";
+  }
+
+  if (preferredSubnet.startsWith("192.168.")) {
+    return "192.168.0.0/16";
+  }
+  if (preferredSubnet.startsWith("172.16.")) {
+    return "172.16.0.0/16";
+  }
+  if (preferredSubnet.startsWith("10.")) {
+    return "10.0.0.0/8";
+  }
+  return preferredSubnet;
+}
+
+function addressRequestFromTopology(topology: TopologySpec): AddressingRequest {
+  const baseNetwork = recommendedBaseNetwork(topology);
+
+  const segments = topology.vlans.length > 0
+    ? topology.vlans.map((vlan) => ({
+      name: vlan.name,
+      host_count: Math.max(
+        topology.endpoints.filter((endpoint) => endpoint.vlan_id === vlan.vlan_id).length + 10,
+        10,
+      ),
+      fixed_subnet: vlan.subnet,
+    }))
+    : topology.subnets
+      .filter((subnet) => !subnet.network.endsWith("/30") && !subnet.network.endsWith("/31"))
+      .map((subnet) => ({
+      name: subnet.name.replace(/ subnet$/i, ""),
+      host_count: Math.max(
+        topology.endpoints.filter((endpoint) => endpoint.subnet_id === subnet.id).length + 10,
+        10,
+      ),
+      fixed_subnet: subnet.network,
+    }));
+
+  return {
+    base_network: baseNetwork,
+    segments,
+    reserved_networks: topology.subnets
+      .filter((subnet) => subnet.network.endsWith("/30") || subnet.network.endsWith("/31"))
+      .map((subnet) => subnet.network),
+  };
+}
+
+function addressPlanFromTopology(topology: TopologySpec, request: AddressingRequest): AddressingPlan {
+  const allocations = request.segments.map((segment, index) => {
+    const linkedVlan = topology.vlans[index] ?? topology.vlans.find((vlan) => vlan.name === segment.name);
+    const linkedSubnet = linkedVlan
+      ? topology.subnets.find((subnet) => subnet.vlan_id === linkedVlan.vlan_id)
+      : topology.subnets.find((subnet) => subnet.name.replace(/ subnet$/i, "") === segment.name) ?? topology.subnets[index];
+    const linkedEndpoints = linkedVlan
+      ? topology.endpoints.filter((endpoint) => endpoint.vlan_id === linkedVlan.vlan_id)
+      : linkedSubnet
+        ? topology.endpoints.filter((endpoint) => endpoint.subnet_id === linkedSubnet.id)
+        : [];
+    return {
+      name: segment.name,
+      network: linkedVlan?.subnet ?? linkedSubnet?.network ?? segment.fixed_subnet ?? "",
+      gateway: linkedVlan?.gateway ?? linkedSubnet?.gateway ?? "",
+      usable_host_count: segment.host_count,
+      allocated_addresses: Object.fromEntries(linkedEndpoints.map((endpoint) => [endpoint.hostname, endpoint.ip_address])),
+    };
+  });
+
+  return {
+    base_network: request.base_network,
+    reserved_networks: request.reserved_networks ?? [],
+    report: "Topology-derived IP plan suggestion generated from the active topology.",
+    allocations,
+  };
+}
+
 function validationLabel(topology: TopologySpec, index: number) {
   const requirement = topology.connectivity_requirements[index];
   if (!requirement) {
@@ -956,6 +1038,21 @@ function ensureSegmentTopologyEntry(topology: TopologySpec, segmentName: string,
   };
 }
 
+function segmentBindingFromTopology(topology: TopologySpec, segmentName: string, index: number) {
+  const vlanByName = topology.vlans.find((vlan) => vlan.name.toUpperCase() === segmentName.toUpperCase());
+  const vlan = topology.vlans[index] ?? vlanByName ?? null;
+  const subnetByName = topology.subnets.find((subnet) => subnet.name.replace(/ subnet$/i, "").toUpperCase() === segmentName.toUpperCase());
+  const subnet = vlan
+    ? topology.subnets.find((item) => item.vlan_id === vlan.vlan_id) ?? subnetByName ?? null
+    : topology.subnets[index] ?? subnetByName ?? null;
+  const endpoints = vlan
+    ? topology.endpoints.filter((endpoint) => endpoint.vlan_id === vlan.vlan_id)
+    : subnet
+      ? topology.endpoints.filter((endpoint) => endpoint.subnet_id === subnet.id)
+      : [];
+  return { vlan, subnet, endpoints };
+}
+
 export function OverviewPage() {
   const { topologyDraft, activeDeployment, activeChange, progressEvents, selectedWorkflowId, savedTopologies, activeTopologyId } = useWorkflowStore();
   const events = latestWorkflowEvents(progressEvents, selectedWorkflowId);
@@ -1121,8 +1218,12 @@ export function TopologyBuilderPage() {
       }),
     onSuccess: (response) => {
       if (response.interpretation.topology) {
-        store.setTopologyDraft(response.interpretation.topology);
-        setProjectName(response.interpretation.topology.project.name);
+        const nextTopology = response.interpretation.topology;
+        const nextRequest = addressRequestFromTopology(nextTopology);
+        store.setTopologyDraft(nextTopology);
+        store.setAddressRequest(nextRequest);
+        store.setAddressPlan(addressPlanFromTopology(nextTopology, nextRequest));
+        setProjectName(nextTopology.project.name);
       }
     },
   });
@@ -2013,6 +2114,21 @@ export function TopologyBuilderPageV2() {
     "Create a two-router branch topology with OSPF between HQ and branch.",
     "Build a simple office topology with one router, one switch, and two endpoints.",
   ];
+  const promptTemplates = [
+    "Create a topology with [router count] routers, [switch count] switches, and [endpoint count] endpoints. Use [VLAN/OSPF/guest isolation] requirements.",
+    "Build an office network for [site name] with [router count] routers, [switch count] switches, and [endpoint count] PCs. Keep [segment name] isolated from [segment name].",
+    "Design an HQ and branch topology with [router count] routers, OSPF between sites, and [endpoint count] endpoints. Each site should have its own LAN.",
+    "Kurumsal bir topoloji olustur: [router sayisi] router, [switch sayisi] switch, [endpoint sayisi] endpoint olsun. [VLAN/OSPF/guest izolasyonu] gereksinimlerini uygula.",
+    "[site adi] icin bir ofis agi kur. [router sayisi] router, [switch sayisi] switch ve [endpoint sayisi] istemci kullan. [segment adi] agi [segment adi] agina erismesin.",
+    "Iki lokasyonlu bir ag tasarla: HQ ve Branch arasinda OSPF calissin, toplam [endpoint sayisi] endpoint olsun, gerekiyorsa VLAN 10/20/30 kullan.",
+  ];
+  const promptPlaceholder = [
+    "Create a topology with [router count] routers, [switch count] switches, and [endpoint count] endpoints.",
+    "Use [VLAN/OSPF/guest isolation] requirements.",
+    "",
+    "Ornek / Example:",
+    "Build an office network with 1 router, 1 switch, and 3 endpoints. Guest must not access Admin.",
+  ].join("\\n");
   const [sourceDeviceId, setSourceDeviceId] = useState(store.topologyDraft.devices[0]?.id ?? "");
   const [targetDeviceId, setTargetDeviceId] = useState(store.topologyDraft.devices[1]?.id ?? "");
   const [sourceInterface, setSourceInterface] = useState(store.topologyDraft.devices[0]?.interfaces[0]?.name ?? "");
@@ -2024,11 +2140,21 @@ export function TopologyBuilderPageV2() {
       }),
     onSuccess: (response) => {
       if (response.interpretation.topology) {
-        store.setTopologyDraft(response.interpretation.topology);
-        setProjectName(response.interpretation.topology.project.name);
+        const nextTopology = response.interpretation.topology;
+        const nextRequest = addressRequestFromTopology(nextTopology);
+        store.setTopologyDraft(nextTopology);
+        store.setAddressRequest(nextRequest);
+        store.setAddressPlan(addressPlanFromTopology(nextTopology, nextRequest));
+        setProjectName(nextTopology.project.name);
       }
     },
   });
+
+  useEffect(() => {
+    if (prompt.startsWith("Ã") || prompt.startsWith("Uc VLAN")) {
+      setPrompt("");
+    }
+  }, [prompt]);
 
   useEffect(() => {
     setProjectName(store.topologyDraft.project.name);
@@ -2209,8 +2335,26 @@ export function TopologyBuilderPageV2() {
         </div>
         <label className="field">
           <span>Requirement prompt</span>
-          <textarea className="textarea" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+          <textarea
+            className="textarea"
+            value={prompt}
+            placeholder={promptPlaceholder}
+            onChange={(event) => setPrompt(event.target.value)}
+          />
         </label>
+        <div className="comparison-grid">
+          {promptTemplates.map((template, index) => (
+            <article key={`${template}-${index}`} className="list-card list-card--static">
+              <strong>{index < 3 ? `English Template ${index + 1}` : `Turkce Sablon ${index - 2}`}</strong>
+              <span>{template}</span>
+              <div className="button-row">
+                <button className="button button--secondary" type="button" onClick={() => setPrompt(template)}>
+                  Use Template
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
         {interpretedSummary ? (
           <article className="list-card list-card--static">
             <strong>{interpretedSummary.title}</strong>
@@ -2234,6 +2378,14 @@ export function TopologyBuilderPageV2() {
               ).map((item) => <span key={item}>{item}</span>)}
             </article>
           </div>
+        ) : null}
+        {interpretTopologyMutation.data?.interpretation.topology ? (
+          <SectionCard
+            title="AI Topology Preview"
+            subtitle="The interpreted topology has already been applied to the draft builder above."
+          >
+            <TopologyCanvas topology={store.topologyDraft} mode="draft" />
+          </SectionCard>
         ) : null}
         {interpretTopologyMutation.data ? <JsonPanel value={interpretTopologyMutation.data.interpretation} /> : <EmptyState title="No AI interpretation yet" description="Submit a topology prompt to see the structured preview, clarifications, warnings, and interpretation notes." />}
       </SectionCard>
@@ -2303,6 +2455,53 @@ export function AddressingPageV2() {
     const entry = ensureSegmentTopologyEntry(store.topologyDraft, request.segments[index]?.name ?? `SEGMENT-${index + 1}`, index);
     const vlan = entry.vlan;
     const subnet = entry.subnet;
+    const existingBinding = segmentBindingFromTopology(store.topologyDraft, request.segments[index]?.name ?? `SEGMENT-${index + 1}`, index);
+    if (!existingBinding.vlan && existingBinding.subnet) {
+      const oldSubnet = existingBinding.subnet;
+      const nextSubnets = store.topologyDraft.subnets.map((item, subnetIndex) => (
+        item.id === oldSubnet.id || subnetIndex === index
+          ? {
+            ...item,
+            ...(field === "name" ? { name: `${value} subnet` } : {}),
+            ...(field === "subnet" ? { network: value } : {}),
+            ...(field === "gateway" ? { gateway: value } : {}),
+          }
+          : item
+      ));
+      const prefixLength = (field === "subnet" ? value : oldSubnet.network).split("/")[1] ?? "24";
+      const nextDevices = store.topologyDraft.devices.map((device) => device.type === "router"
+        ? {
+          ...device,
+          interfaces: device.interfaces.map((iface) => {
+            const currentIp = iface.ipv4_address;
+            if (!currentIp) {
+              return iface;
+            }
+            const currentAddress = currentIp.split("/")[0];
+            const subnetGateway = oldSubnet.gateway ?? "";
+            if (field === "gateway" && currentAddress === subnetGateway) {
+              return { ...iface, ipv4_address: `${value}/${prefixLength}` };
+            }
+            if (field === "subnet" && oldSubnet.gateway && currentAddress === oldSubnet.gateway) {
+              return { ...iface, ipv4_address: `${oldSubnet.gateway}/${prefixLength}` };
+            }
+            return iface;
+          }),
+        }
+        : device);
+      store.setTopologyDraft(synchronizeTopologyAssignments({
+        ...store.topologyDraft,
+        subnets: nextSubnets,
+        devices: nextDevices,
+        endpoints: store.topologyDraft.endpoints.map((endpoint) => endpoint.subnet_id === oldSubnet.id
+          ? {
+            ...endpoint,
+            ...(field === "gateway" ? { default_gateway: value } : {}),
+          }
+          : endpoint),
+      }));
+      return;
+    }
     const nextVlans = store.topologyDraft.vlans.slice();
     nextVlans[index] = nextVlans[index]
       ? {
@@ -2364,14 +2563,14 @@ export function AddressingPageV2() {
     reserved_networks: [],
     report: "Manual or generated IP plan currently applied in the UI.",
     allocations: request.segments.map((segment, index) => {
-      const linkedVlan = store.topologyDraft.vlans[index];
-      const linkedEndpoints = linkedVlan
-        ? store.topologyDraft.endpoints.filter((endpoint) => endpoint.vlan_id === linkedVlan.vlan_id)
-        : [];
+      const binding = segmentBindingFromTopology(store.topologyDraft, segment.name, index);
+      const linkedVlan = binding.vlan;
+      const linkedSubnet = binding.subnet;
+      const linkedEndpoints = binding.endpoints;
       return {
         name: segment.name,
-        network: linkedVlan?.subnet ?? "",
-        gateway: linkedVlan?.gateway ?? "",
+        network: linkedVlan?.subnet ?? linkedSubnet?.network ?? segment.fixed_subnet ?? "",
+        gateway: linkedVlan?.gateway ?? linkedSubnet?.gateway ?? "",
         usable_host_count: segment.host_count,
         allocated_addresses: Object.fromEntries(linkedEndpoints.map((endpoint) => [endpoint.hostname, endpoint.ip_address])),
       };
@@ -2461,8 +2660,10 @@ export function AddressingPageV2() {
       <SectionCard title="Manual Segment and Endpoint Mapping" subtitle="These values are tied to the topology project and feed the next configuration render.">
         <div className="stack">
           {request.segments.map((segment, index) => {
-            const linkedVlan = store.topologyDraft.vlans[index];
-            const linkedEndpoints = linkedVlan ? store.topologyDraft.endpoints.filter((endpoint) => endpoint.vlan_id === linkedVlan.vlan_id) : [];
+            const binding = segmentBindingFromTopology(store.topologyDraft, segment.name, index);
+            const linkedVlan = binding.vlan;
+            const linkedSubnet = binding.subnet;
+            const linkedEndpoints = binding.endpoints;
             return (
             <article key={`${segment.name}-${index}`} className="list-card list-card--static">
               <strong>{segment.name}</strong>
@@ -2476,11 +2677,11 @@ export function AddressingPageV2() {
                 </label>
                 <label className="field ip-plan-field">
                   <span>Subnet</span>
-                  <input value={linkedVlan?.subnet ?? ""} onChange={(event) => updateTopologyFromSegment(index, "subnet", event.target.value)} />
+                  <input value={linkedVlan?.subnet ?? linkedSubnet?.network ?? ""} onChange={(event) => updateTopologyFromSegment(index, "subnet", event.target.value)} />
                 </label>
                 <label className="field ip-plan-field">
                   <span>Gateway</span>
-                  <input value={linkedVlan?.gateway ?? ""} onChange={(event) => updateTopologyFromSegment(index, "gateway", event.target.value)} />
+                  <input value={linkedVlan?.gateway ?? linkedSubnet?.gateway ?? ""} onChange={(event) => updateTopologyFromSegment(index, "gateway", event.target.value)} />
                 </label>
               </div>
               {linkedEndpoints.map((endpoint) => (

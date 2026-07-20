@@ -7,13 +7,14 @@ from app.ai.models import (
     InterpretedTopologyPlan,
     SafetyFinding,
 )
-from app.ai.providers import HeuristicLLMProvider, LLMProvider
+from app.ai.providers import GeminiLLMProvider, HeuristicLLMProvider, LLMProvider
 from app.ai.service import AIService
 
 __all__ = [
     "AIService",
     "ClarificationItem",
     "DeterministicExplanation",
+    "GeminiLLMProvider",
     "HeuristicLLMProvider",
     "InterpretedChangePlan",
     "InterpretedTopologyPlan",
