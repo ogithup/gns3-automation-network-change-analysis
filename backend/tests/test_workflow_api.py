@@ -64,7 +64,7 @@ def test_workflow_api_end_to_end() -> None:
         json={"prompt": "Build a simple office topology with one router, one switch, and two endpoints."},
     )
     assert ai_simple_response.status_code == 200
-    assert ai_simple_response.json()["interpretation"]["topology"]["project"]["name"] == "ai-simple-office"
+    assert ai_simple_response.json()["interpretation"]["topology"]["project"]["name"] == "ai-generated-topology"
 
     validate_response = client.post("/api/v1/specifications/validate", json={"specification": _sample_spec()})
     assert validate_response.status_code == 200

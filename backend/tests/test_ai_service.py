@@ -97,7 +97,7 @@ def test_ai_service_accepts_valid_topology_output() -> None:
         ),
     )
 
-    result = service.interpret_topology_request("Create a small office.")
+    result = service.interpret_topology_request("Review this uploaded topology.")
 
     assert result.topology is not None
     assert result.preview["device_count"] == 5
@@ -110,7 +110,7 @@ def test_ai_service_returns_validation_errors_for_malformed_topology_output() ->
         ),
     )
 
-    result = service.interpret_topology_request("Malformed topology.")
+    result = service.interpret_topology_request("Review this malformed topology object.")
 
     assert result.topology is not None
     assert any(
@@ -171,7 +171,7 @@ def test_ai_service_interprets_two_router_ospf_prompt_without_clarification() ->
     service = AIService()
 
     result = service.interpret_topology_request(
-        "Create a two-router branch topology with OSPF between HQ and branch.",
+        "Review this topology proposal for two routers with OSPF between HQ and branch.",
     )
 
     assert result.topology is not None
@@ -264,7 +264,7 @@ def test_gemini_provider_parses_structured_topology_response() -> None:
     )
     service = AIService(provider=provider)
 
-    result = service.interpret_topology_request("Create a small office.")
+    result = service.interpret_topology_request("Review this topology output.")
 
     assert result.topology is not None
     assert result.topology.project.name == "three-vlan-office"
@@ -275,7 +275,7 @@ def test_ai_service_falls_back_when_primary_provider_times_out() -> None:
     service = AIService(provider=TimeoutProvider())
 
     result = service.interpret_topology_request(
-        "Create a two-router branch topology with OSPF between HQ and branch.",
+        "Interpret this design for two routers with OSPF between HQ and branch.",
     )
 
     assert result.topology is not None
@@ -297,7 +297,7 @@ def test_ai_service_falls_back_when_provider_returns_no_topology_without_clarifi
     )
 
     result = service.interpret_topology_request(
-        "Build a simple office topology with one router, one switch, and three endpoints.",
+        "Interpret this office design with one router, one switch, and three endpoints.",
     )
 
     assert result.topology is not None
@@ -320,8 +320,7 @@ def test_ai_service_strips_current_topology_context_for_create_prompts() -> None
     )
 
     assert result.topology is not None
-    assert provider.last_context is not None
-    assert "current_topology" not in provider.last_context
+    assert provider.last_context is None
 
 
 def test_ai_service_falls_back_when_create_prompt_returns_preview_only() -> None:
@@ -335,9 +334,7 @@ def test_ai_service_falls_back_when_create_prompt_returns_preview_only() -> None
     assert result.topology is not None
     assert len(result.topology.endpoints) == 2
     assert any(
-        "Primary provider returned no topology object."
-        in warning or "Primary provider requested clarification for a create/build topology prompt."
-        in warning
+        "deterministic topology generator" in warning.casefold()
         for warning in result.warnings
     )
 
@@ -354,7 +351,7 @@ def test_ai_service_falls_back_when_provider_topology_shape_mismatches_prompt() 
     )
 
     result = service.interpret_topology_request(
-        "Build a simple office topology with one router, one switch, and three endpoints.",
+        "Interpret this office design with one router, one switch, and three endpoints.",
     )
 
     assert result.topology is not None

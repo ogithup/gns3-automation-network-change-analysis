@@ -606,10 +606,10 @@ def _extract_topology_intent(lowered_prompt: str) -> TopologyIntent:
     project_name = "ai-generated-topology"
     if requires_ospf:
         project_name = "ai-two-router-ospf"
-    elif guest_isolation:
-        project_name = "ai-guest-isolation"
     elif vlan_count >= 3:
         project_name = "ai-three-vlan-office"
+    elif guest_isolation:
+        project_name = "ai-guest-isolation"
 
     return TopologyIntent(
         router_count=router_count,
