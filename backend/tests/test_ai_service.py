@@ -275,7 +275,7 @@ def test_ai_service_falls_back_when_primary_provider_times_out() -> None:
     service = AIService(provider=TimeoutProvider())
 
     result = service.interpret_topology_request(
-        "Interpret this design for two routers with OSPF between HQ and branch.",
+        "Review topology notes for two routers with OSPF between HQ and branch.",
     )
 
     assert result.topology is not None
@@ -297,7 +297,7 @@ def test_ai_service_falls_back_when_provider_returns_no_topology_without_clarifi
     )
 
     result = service.interpret_topology_request(
-        "Interpret this office design with one router, one switch, and three endpoints.",
+        "Review this office topology note with one router, one switch, and three endpoints.",
     )
 
     assert result.topology is not None
@@ -351,7 +351,7 @@ def test_ai_service_falls_back_when_provider_topology_shape_mismatches_prompt() 
     )
 
     result = service.interpret_topology_request(
-        "Interpret this office design with one router, one switch, and three endpoints.",
+        "Review this office topology note with one router, one switch, and three endpoints.",
     )
 
     assert result.topology is not None
