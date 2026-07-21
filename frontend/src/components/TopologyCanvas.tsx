@@ -30,15 +30,47 @@ type ImpactVisualState = {
   affectedEdges: Set<string>;
 };
 
-function positionForDevice(device: DeviceSpec, index: number) {
-  const typeOrder = {
-    router: 120,
-    switch: 320,
-    endpoint: 540,
-  };
-  const x = 80 + (index % 3) * 260;
-  const y = typeOrder[device.type] ?? 320;
-  return { x, y };
+function buildDevicePositions(devices: DeviceSpec[]) {
+  const rows: Array<{ type: DeviceSpec["type"]; y: number }> = [
+    { type: "router", y: 100 },
+    { type: "switch", y: 300 },
+    { type: "endpoint", y: 520 },
+  ];
+  const minimumX = 120;
+  const baseSpacing = 260;
+  const positions = new Map<string, { x: number; y: number }>();
+
+  rows.forEach(({ type, y }) => {
+    const rowDevices = devices
+      .filter((device) => device.type === type)
+      .sort((left, right) => left.hostname.localeCompare(right.hostname));
+
+    if (rowDevices.length === 0) {
+      return;
+    }
+
+    const rowWidth = Math.max((rowDevices.length - 1) * baseSpacing, 0);
+    const startX = Math.max(minimumX, 420 - (rowWidth / 2));
+
+    rowDevices.forEach((device, index) => {
+      positions.set(device.id, {
+        x: startX + (index * baseSpacing),
+        y,
+      });
+    });
+  });
+
+  devices
+    .filter((device) => !positions.has(device.id))
+    .sort((left, right) => left.hostname.localeCompare(right.hostname))
+    .forEach((device, index) => {
+      positions.set(device.id, {
+        x: minimumX + (index * baseSpacing),
+        y: 300,
+      });
+    });
+
+  return positions;
 }
 
 function buildEdgeId(sourceDevice: string, sourceInterface: string, targetDevice: string, index: number) {
@@ -247,10 +279,15 @@ export function TopologyCanvas(props: TopologyCanvasProps) {
     [props.change, props.topology],
   );
 
+  const devicePositions = useMemo(
+    () => buildDevicePositions(props.topology.devices),
+    [props.topology.devices],
+  );
+
   const nodes = useMemo<Node[]>(
-    () => props.topology.devices.map((device, index) => ({
+    () => props.topology.devices.map((device) => ({
       id: device.id,
-      position: positionForDevice(device, index),
+      position: devicePositions.get(device.id) ?? { x: 120, y: 300 },
       data: {
         label: (
           <div className="device-node__content">
@@ -262,7 +299,7 @@ export function TopologyCanvas(props: TopologyCanvasProps) {
       },
       className: `device-node ${toneForDevice(device, impactVisualState, props.deployment, props.mode)}`,
     })),
-    [impactVisualState, props.deployment, props.mode, props.topology.devices],
+    [devicePositions, impactVisualState, props.deployment, props.mode, props.topology.devices],
   );
 
   const edges = useMemo<Edge[]>(

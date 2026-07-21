@@ -469,6 +469,69 @@ function interpretTopologySummary(plan: InterpretedTopologyPlan) {
   };
 }
 
+function riskNarrative(risk: NonNullable<NonNullable<ReturnType<typeof useWorkflowStore>["activeChange"]>["risk"]>) {
+  const sortedFactors = [...risk.factor_scores]
+    .sort((left, right) => right.contribution - left.contribution)
+    .filter((factor) => factor.contribution > 0);
+  const topFactors = sortedFactors.slice(0, 3);
+  const topFactorText = topFactors.length
+    ? topFactors.map((factor) => `${factor.factor} (+${factor.contribution})`).join(", ")
+    : "No major factor contributed materially.";
+
+  return {
+    tr: [
+      `Bu degisiklik icin toplam risk skoru ${risk.total_score} ve seviye ${risk.risk_level}.`,
+      `Sistem bu sonucu en cok su etkenlere gore verdi: ${topFactorText}.`,
+      `Oneri: ${risk.recommendation}. Bakim beklentisi: ${risk.suggested_maintenance_requirement}`,
+    ],
+    en: [
+      `The total risk score for this change is ${risk.total_score} with a ${risk.risk_level} level.`,
+      `The strongest contributors were: ${topFactorText}.`,
+      `Recommendation: ${risk.recommendation}. Maintenance guidance: ${risk.suggested_maintenance_requirement}`,
+    ],
+  };
+}
+
+function approvalNarrative(change: NonNullable<ReturnType<typeof useWorkflowStore>["activeChange"]>) {
+  const simulationState = change.simulation ? "ready" : "missing";
+  return {
+    tr: [
+      `Bu degisiklik su anda ${change.status} durumunda.`,
+      simulationState === "ready"
+        ? "Simulasyon sonucu mevcut; onay verirsen apply adimina gecebilirsin."
+        : "Simulasyon sonucu yok; approval oncesi once simulate calistirilmasi gerekir.",
+      "Approve: degisikligi kontrollu sekilde uygulama sirasina alir. Reject: degisikligi durdurur. Apply Change: onayli degisikligi backend workflow uzerinden uygulamayi dener.",
+    ],
+    en: [
+      `This change is currently in the ${change.status} state.`,
+      simulationState === "ready"
+        ? "A simulation result is available; after approval you can move to apply."
+        : "There is no simulation result yet; run simulation before approval.",
+      "Approve moves the change forward for controlled execution. Reject stops it. Apply Change attempts to execute the approved change through the backend workflow.",
+    ],
+  };
+}
+
+function rollbackNarrative(change: NonNullable<ReturnType<typeof useWorkflowStore>["activeChange"]>) {
+  const hasRollbackState = change.status.toLowerCase().includes("rollback");
+  return {
+    tr: [
+      "Rollback sayfasi, uygulanmis veya kritik hata vermis bir degisikligi geri alma adimi icindir.",
+      "Bu projede mevcut strateji inverse-command rollback; yani sistem degisikligin ters komutunu calistirmayi hedefler.",
+      hasRollbackState
+        ? `Mevcut change durumu ${change.status}; bu, rollback akisina girildigini veya tamamlandigini gosteriyor.`
+        : `Mevcut change durumu ${change.status}; rollback butonu kullanilirsa backend geri alma kaydi olusturmaya calisir.`,
+    ],
+    en: [
+      "The Rollback page is used to reverse an applied change or recover from a critical failure.",
+      "In this project the current strategy is inverse-command rollback, meaning the system tries to execute the inverse of the original change.",
+      hasRollbackState
+        ? `The current change state is ${change.status}; this means the workflow has entered or completed rollback handling.`
+        : `The current change state is ${change.status}; if you press Rollback, the backend will try to create a recovery action.`,
+    ],
+  };
+}
+
 function interfaceExplanation(deviceType: string, interfaceName: string) {
   const lower = interfaceName.toLowerCase();
   if (deviceType === "router" && lower.startsWith("gigabitethernet")) {
@@ -1701,6 +1764,28 @@ export function ChangeBuilderPage() {
           </div>
         )}
       >
+        <div className="guide-grid">
+          <article className="list-card list-card--static">
+            <strong>Turkce kullanim rehberi</strong>
+            <span>1. Once aktif topology ve deployment olusturulmus olmali.</span>
+            <span>2. Change type, device, interface ve gerekiyorsa VLAN alanlarini doldur.</span>
+            <span>3. `Build Change` secilen degisikligi change kaydi olarak olusturur.</span>
+            <span>4. `Simulate` bu degisikligi digital twin uzerinde calistirir.</span>
+            <span>5. Simulasyon basarili olunca sonucu `Before / After` sayfasinda gorursun.</span>
+          </article>
+          <article className="list-card list-card--static">
+            <strong>English usage guide</strong>
+            <span>1. Start with an active topology and an existing deployment record.</span>
+            <span>2. Fill the change type, device, interface, and VLAN fields when needed.</span>
+            <span>3. `Build Change` creates the typed change record.</span>
+            <span>4. `Simulate` runs that change on the digital twin model.</span>
+            <span>5. When simulation completes, check the result on the `Before / After` page.</span>
+          </article>
+        </div>
+        <p className="inline-note">
+          Quick demo: choose <strong>Remove VLAN from trunk</strong>, select <strong>SW1</strong>, keep the trunk interface,
+          enter a VLAN such as <strong>20</strong>, then click <strong>Build Change</strong> and <strong>Simulate</strong>.
+        </p>
         <div className="form-grid">
           <label className="field">
             <span>Change type</span>
@@ -1786,6 +1871,31 @@ export function ComparisonPage() {
   return (
     <div className="page-grid">
       <SectionCard title="Before / After Comparison" subtitle="Simulation output and affected object deltas.">
+        <div className="guide-grid">
+          <article className="list-card list-card--static">
+            <strong>Turkce rehber</strong>
+            <span>Bu sayfa simulation oncesi ve sonrasi erisilebilirlik farkini gosterir.</span>
+            <span>`Before` degisiklik uygulanmadan onceki beklenen sonucu verir.</span>
+            <span>`After` degisiklik sonrasi hangi path'lerin bozuldugunu veya degistigini gosterir.</span>
+            <span>Kirmizi cihaz veya link: dogrudan etkilenen ya da kopan bolge.</span>
+            <span>Turuncu cihaz: gecis noktasi, yani etkiden dolayli etkilenen transit cihaz.</span>
+            <span>Yesil cihaz: calismaya devam eden veya etkilenmemis cihaz.</span>
+          </article>
+          <article className="list-card list-card--static">
+            <strong>English guide</strong>
+            <span>This page shows the reachability difference before and after simulation.</span>
+            <span>`Before` is the expected path before the change is applied.</span>
+            <span>`After` shows which paths are lost or changed after the simulated change.</span>
+            <span>Red device or link: directly affected or broken part of the topology.</span>
+            <span>Orange device: a transit device that is indirectly affected.</span>
+            <span>Green device: still reachable or not impacted by the current change.</span>
+          </article>
+        </div>
+        <p className="inline-note">
+          Fastest way to see one visible change: create a trunk-related change in <strong>Change Builder</strong>, click
+          <strong> Build Change</strong>, then <strong>Simulate</strong>. After that this page and the impact topology
+          below will update together.
+        </p>
         {activeChange?.simulation ? (
           <div className="comparison-grid">
             <div>
@@ -1803,6 +1913,22 @@ export function ComparisonPage() {
       </SectionCard>
 
       <SectionCard title="Impact Topology" subtitle="Direct and indirect impacts are highlighted visually.">
+        <div className="guide-grid">
+          <article className="list-card list-card--static">
+            <strong>Renk anlami / Color meaning</strong>
+            <span>Yesil / Green: normal veya ayakta kalan cihaz.</span>
+            <span>Kirmizi / Red: dogrudan etkilenen endpoint veya kopan baglanti alani.</span>
+            <span>Turuncu / Orange: transit switch/router, yani etkinin uzerinden gectigi ara nokta.</span>
+            <span>Animasyonlu impact link: degisiklikten etkilenen path.</span>
+          </article>
+          <article className="list-card list-card--static">
+            <strong>Tek change gormek icin / To see a single change</strong>
+            <span>1. Change Builder'da trunk veya interface odakli bir degisiklik sec.</span>
+            <span>2. Build Change ile kaydi olustur.</span>
+            <span>3. Simulate ile sonucu hesaplat.</span>
+            <span>4. Sonra bu sayfada hangi cihaz/link etkilendi aninda gor.</span>
+          </article>
+        </div>
         {activeDeployment?.topology ? (
           <TopologyCanvas topology={activeDeployment.topology} deployment={activeDeployment} change={activeChange} mode="impact" />
         ) : (
@@ -1816,17 +1942,39 @@ export function ComparisonPage() {
 export function RiskPage() {
   const { activeChange } = useWorkflowStore();
   const risk = activeChange?.risk;
+  const narrative = risk ? riskNarrative(risk) : null;
 
   return (
     <div className="page-grid">
       <SectionCard title="Impact and Risk Report" subtitle="Explainable scoring from Sprint 11.">
         {risk ? (
           <>
+            <div className="guide-grid">
+              <article className="list-card list-card--static">
+                <strong>Turkce aciklama</strong>
+                {narrative?.tr.map((line) => <span key={line}>{line}</span>)}
+                <span>Bu sayfadaki amac, degisikligin neden riskli veya kabul edilebilir oldugunu insan tarafinda yorumlanabilir hale getirmektir.</span>
+              </article>
+              <article className="list-card list-card--static">
+                <strong>English explanation</strong>
+                {narrative?.en.map((line) => <span key={line}>{line}</span>)}
+                <span>This page exists to make the change risk understandable and reviewable before approval or apply.</span>
+              </article>
+            </div>
             <div className="metric-grid">
               <MetricTile label="Risk score" value={risk.total_score} tone="danger" />
               <MetricTile label="Level" value={risk.risk_level} tone="accent" />
               <MetricTile label="Recommendation" value={risk.recommendation} tone="accent" />
               <MetricTile label="Maintenance" value={risk.suggested_maintenance_requirement} />
+            </div>
+            <div className="comparison-grid">
+              {risk.factor_scores.map((factor) => (
+                <article key={factor.factor} className="list-card list-card--static">
+                  <strong>{factor.factor}</strong>
+                  <span>TR: Katki puani {factor.contribution}, agirlik {factor.weight}, aciklama: {factor.explanation}</span>
+                  <small>EN: Contribution {factor.contribution}, weight {factor.weight}, explanation: {factor.explanation}</small>
+                </article>
+              ))}
             </div>
             <JsonPanel value={risk} />
           </>
@@ -1843,6 +1991,7 @@ export function ApprovalPage() {
   const [reviewer, setReviewer] = useState("operator");
   const [note, setNote] = useState("Simulation reviewed.");
   useWorkflowProgress(store.activeChange?.id);
+  const narrative = store.activeChange ? approvalNarrative(store.activeChange) : null;
 
   const approveMutation = useMutation({
     mutationFn: ({ changeId, approved }: { changeId: string; approved: boolean }) =>
@@ -1874,6 +2023,20 @@ export function ApprovalPage() {
           </div>
         ) : undefined}
       >
+        <div className="guide-grid">
+          <article className="list-card list-card--static">
+            <strong>Turkce rehber</strong>
+            <span>Bu sayfa degisikligi uygulamadan once operator onayi vermek icin kullanilir.</span>
+            {narrative?.tr.map((line) => <span key={line}>{line}</span>)}
+            <span>Kullanim sirasi: once Simulate, sonra riski incele, sonra Approve veya Reject sec, gerekiyorsa en son Apply Change kullan.</span>
+          </article>
+          <article className="list-card list-card--static">
+            <strong>English guide</strong>
+            <span>This page is used to approve or reject a change before execution.</span>
+            {narrative?.en.map((line) => <span key={line}>{line}</span>)}
+            <span>Typical flow: Simulate first, review risk, choose Approve or Reject, and only then use Apply Change if appropriate.</span>
+          </article>
+        </div>
         <div className="field-row">
           <label className="field">
             <span>Reviewer</span>
@@ -1892,6 +2055,7 @@ export function ApprovalPage() {
 
 export function RollbackPage() {
   const store = useWorkflowStore();
+  const narrative = store.activeChange ? rollbackNarrative(store.activeChange) : null;
   const rollbackMutation = useMutation({
     mutationFn: (changeId: string) => workflowClient.rollbackChange(changeId),
     onSuccess: (change) => {
@@ -1911,6 +2075,18 @@ export function RollbackPage() {
       >
         {store.activeChange ? (
           <div className="stack">
+            <div className="guide-grid">
+              <article className="list-card list-card--static">
+                <strong>Turkce aciklama</strong>
+                {narrative?.tr.map((line) => <span key={line}>{line}</span>)}
+                <span>Sonucu yorumlama: RolledBack gibi bir durum gorursen geri alma basarili olmustur; Failed veya Applying asamasinda ise olaylari Audit History'den de kontrol et.</span>
+              </article>
+              <article className="list-card list-card--static">
+                <strong>English explanation</strong>
+                {narrative?.en.map((line) => <span key={line}>{line}</span>)}
+                <span>How to read the result: a state such as RolledBack means recovery succeeded; if you see Failed or an in-progress state, also inspect Audit History.</span>
+              </article>
+            </div>
             <p className="inline-note">Available strategy in the current workflow API: inverse-command rollback on the active change record.</p>
             <JsonPanel value={store.activeChange} />
           </div>

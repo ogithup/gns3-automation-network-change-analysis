@@ -47,6 +47,7 @@ a {
   top: 0;
   height: 100vh;
   padding: 28px 22px;
+  overflow-y: auto;
   color: #f9fbff;
   background:
     linear-gradient(180deg, rgba(17, 34, 58, 0.95) 0%, rgba(16, 26, 43, 0.97) 100%),
